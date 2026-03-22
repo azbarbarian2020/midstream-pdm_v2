@@ -72,10 +72,10 @@ setup_connection() {
     echo ""
 
     PLATFORM=$(snow sql --connection "$CONNECTION_NAME" -q "SELECT SPLIT_PART(CURRENT_REGION(), '_', 1)" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0][list(d[0].keys())[0]])")
-    if [[ "$PLATFORM" != "AWS" ]]; then
+    if [[ "$PLATFORM" != *"AWS"* ]]; then
         echo -e "${YELLOW}⚠  Non-AWS region detected ($PLATFORM). Cortex AI features require AWS.${NC}"
         read -p "Continue anyway? (y/n): " CONT
-        [ "$CONT" != "y" ] && exit 1
+        if [ "$CONT" != "y" ]; then exit 1; fi
     fi
 }
 
