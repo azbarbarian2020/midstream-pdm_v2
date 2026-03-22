@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="light"] {
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --surface-secondary: #f1f5f9;
+  --foreground: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --hover: #f1f5f9;
+  --card: #ffffff;
+  --card-border: #e2e8f0;
+  --input-bg: #ffffff;
+  --input-border: #cbd5e1;
+  --input-text: #0f172a;
+  --tooltip-bg: #ffffff;
+  --tooltip-border: #e2e8f0;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #94a3b8;
+  --table-header: #f1f5f9;
+  --table-border: #e2e8f0;
+  --badge-bg: #f1f5f9;
+  --red-surface: rgba(254, 226, 226, 0.5);
+  --red-border: #fca5a5;
+  --amber-surface: rgba(254, 243, 199, 0.5);
+  --amber-border: #fcd34d;
+  --emerald-surface: rgba(209, 250, 229, 0.5);
+  --emerald-border: #6ee7b7;
+  --blue-surface: rgba(219, 234, 254, 0.5);
+  --purple-surface: rgba(237, 233, 254, 0.5);
+}
+
+[data-theme="dark"] {
+  --background: #030712;
+  --surface: #111827;
+  --surface-secondary: #1f2937;
+  --foreground: #f1f5f9;
+  --muted: #9ca3af;
+  --border: #1f2937;
+  --hover: #1f2937;
+  --card: #111827;
+  --card-border: #1f2937;
+  --input-bg: #1f2937;
+  --input-border: #374151;
+  --input-text: #f1f5f9;
+  --tooltip-bg: #1f2937;
+  --tooltip-border: #374151;
+  --chart-grid: #374151;
+  --chart-axis: #6b7280;
+  --table-header: #1f2937;
+  --table-border: #1f2937;
+  --badge-bg: #1f2937;
+  --red-surface: rgba(127, 29, 29, 0.3);
+  --red-border: #991b1b;
+  --amber-surface: rgba(120, 53, 15, 0.3);
+  --amber-border: #92400e;
+  --emerald-surface: rgba(6, 78, 59, 0.3);
+  --emerald-border: #065f46;
+  --blue-surface: rgba(30, 58, 138, 0.3);
+  --purple-surface: rgba(76, 29, 149, 0.3);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.maplibregl-popup-content,
+.maplibregl-popup-content div,
+.maplibregl-popup-content span {
+  color: #000;
+}
+
+@keyframes tech-home-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(99, 102, 241, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+}
+
+.tech-home-icon {
+  animation: tech-home-pulse 2s infinite;
+  z-index: 1000 !important;
+}

@@ -1,0 +1,406 @@
+name: FLEET_SEMANTIC_VIEW
+description: >
+  Fleet-wide analytics for midstream pipeline operations. Covers asset health,
+  predictions (failure classification and remaining useful life), maintenance
+  history, and sensor telemetry across pump and compressor assets in the Permian Basin.
+
+tables:
+  - name: FLEET_KPI_VIEW
+    description: >
+      Primary KPI view joining assets, stations, latest predictions, and
+      maintenance summary. Use this table for fleet-level questions about
+      asset counts, risk distribution, RUL values, and station comparisons.
+    base_table:
+      database: PDM_DEMO
+      schema: ANALYTICS
+      table: FLEET_KPI_VIEW
+    dimensions:
+      - name: ASSET_ID
+        description: Unique integer identifier for the asset.
+        expr: ASSET_ID
+        data_type: NUMBER
+        unique: true
+      - name: ASSET_TYPE
+        description: Type of asset. Values are PUMP or COMPRESSOR.
+        expr: ASSET_TYPE
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["PUMP", "COMPRESSOR"]
+      - name: MODEL_NAME
+        description: Equipment model name (e.g. Flowserve HPRT, Ariel JGK/4).
+        expr: MODEL_NAME
+        data_type: VARCHAR
+      - name: MANUFACTURER
+        description: Equipment manufacturer name.
+        expr: MANUFACTURER
+        data_type: VARCHAR
+      - name: STATION_ID
+        description: ID of the station where the asset is located.
+        expr: STATION_ID
+        data_type: NUMBER
+      - name: STATION_NAME
+        description: Human-readable name of the station (e.g. Midland Junction, Odessa Compressor Hub).
+        expr: STATION_NAME
+        data_type: VARCHAR
+      - name: REGION
+        description: Geographic region. Currently all assets are in Permian Basin.
+        expr: REGION
+        data_type: VARCHAR
+      - name: PREDICTED_CLASS
+        synonyms: ["failure mode", "predicted failure"]
+        description: >
+          ML-predicted failure mode. Values: NORMAL, BEARING_WEAR,
+          VALVE_FAILURE, SEAL_LEAK (pumps only), SURGE (compressors only),
+          OVERHEATING.
+        expr: PREDICTED_CLASS
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["NORMAL", "BEARING_WEAR", "VALVE_FAILURE", "SEAL_LEAK", "SURGE", "OVERHEATING"]
+      - name: RISK_LEVEL
+        synonyms: ["risk", "health status", "condition"]
+        description: >
+          Derived risk category based on RUL. CRITICAL if RUL <= 7 days,
+          WARNING if 7 < RUL <= 30 days, HEALTHY if RUL > 30 days.
+        expr: RISK_LEVEL
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["CRITICAL", "WARNING", "HEALTHY"]
+    time_dimensions:
+      - name: INSTALL_DATE
+        description: Date the asset was installed.
+        expr: INSTALL_DATE
+        data_type: DATE
+      - name: PREDICTION_TS
+        description: Timestamp of the prediction.
+        expr: PREDICTION_TS
+        data_type: TIMESTAMP_NTZ
+      - name: LAST_MAINTENANCE_DATE
+        description: Date of the most recent maintenance event for this asset.
+        expr: LAST_MAINTENANCE_DATE
+        data_type: TIMESTAMP_NTZ
+    facts:
+      - name: RATED_CAPACITY
+        description: Rated capacity of the asset in design units.
+        expr: RATED_CAPACITY
+        data_type: FLOAT
+      - name: STATION_LAT
+        description: Station latitude coordinate.
+        expr: STATION_LAT
+        data_type: FLOAT
+      - name: STATION_LON
+        description: Station longitude coordinate.
+        expr: STATION_LON
+        data_type: FLOAT
+      - name: PREDICTED_RUL_DAYS
+        synonyms: ["RUL", "remaining useful life", "days to failure"]
+        description: Predicted remaining useful life in days before failure.
+        expr: PREDICTED_RUL_DAYS
+        data_type: FLOAT
+      - name: DAYS_SINCE_MAINTENANCE
+        description: Number of days since the last maintenance event.
+        expr: DAYS_SINCE_MAINTENANCE
+        data_type: NUMBER
+      - name: TOTAL_MAINTENANCE_COUNT
+        description: Total number of historical maintenance events for this asset.
+        expr: TOTAL_MAINTENANCE_COUNT
+        data_type: NUMBER
+    metrics:
+      - name: TOTAL_ASSETS
+        synonyms: ["asset count", "fleet size"]
+        description: Total number of assets.
+        expr: COUNT(*)
+      - name: CRITICAL_ASSET_COUNT
+        synonyms: ["critical count"]
+        description: Number of assets at critical risk level.
+        expr: SUM(CASE WHEN RISK_LEVEL = 'CRITICAL' THEN 1 ELSE 0 END)
+      - name: WARNING_ASSET_COUNT
+        description: Number of assets at warning risk level.
+        expr: SUM(CASE WHEN RISK_LEVEL = 'WARNING' THEN 1 ELSE 0 END)
+      - name: HEALTHY_ASSET_COUNT
+        description: Number of healthy assets.
+        expr: SUM(CASE WHEN RISK_LEVEL = 'HEALTHY' THEN 1 ELSE 0 END)
+      - name: AVG_RUL_DAYS
+        synonyms: ["average remaining useful life"]
+        description: Average predicted remaining useful life in days.
+        expr: AVG(PREDICTED_RUL_DAYS)
+
+  - name: TELEMETRY
+    description: >
+      Raw sensor telemetry at hourly intervals. Use for questions about
+      specific sensor readings, trends, and anomalies.
+    base_table:
+      database: PDM_DEMO
+      schema: RAW
+      table: TELEMETRY
+    dimensions:
+      - name: ASSET_ID
+        description: Asset identifier.
+        expr: ASSET_ID
+        data_type: NUMBER
+    time_dimensions:
+      - name: TS
+        synonyms: ["timestamp", "reading time"]
+        description: Telemetry timestamp.
+        expr: TS
+        data_type: TIMESTAMP_NTZ
+    facts:
+      - name: VIBRATION
+        description: Vibration reading in mm/s RMS.
+        expr: VIBRATION
+        data_type: FLOAT
+      - name: TEMPERATURE
+        description: Temperature reading in degrees Fahrenheit.
+        expr: TEMPERATURE
+        data_type: FLOAT
+      - name: PRESSURE
+        description: Pressure reading in PSI.
+        expr: PRESSURE
+        data_type: FLOAT
+      - name: FLOW_RATE
+        description: Flow rate.
+        expr: FLOW_RATE
+        data_type: FLOAT
+      - name: RPM
+        description: Rotational speed in revolutions per minute.
+        expr: RPM
+        data_type: FLOAT
+      - name: POWER_DRAW
+        description: Power consumption.
+        expr: POWER_DRAW
+        data_type: FLOAT
+      - name: DIFFERENTIAL_PRESSURE
+        description: Differential pressure (pumps only).
+        expr: DIFFERENTIAL_PRESSURE
+        data_type: FLOAT
+      - name: SUCTION_PRESSURE
+        description: Suction pressure (pumps only).
+        expr: SUCTION_PRESSURE
+        data_type: FLOAT
+      - name: SEAL_TEMPERATURE
+        description: Seal temperature (pumps only).
+        expr: SEAL_TEMPERATURE
+        data_type: FLOAT
+      - name: DISCHARGE_TEMP
+        description: Discharge temperature (compressors only).
+        expr: DISCHARGE_TEMP
+        data_type: FLOAT
+      - name: COMPRESSION_RATIO
+        description: Compression ratio (compressors only).
+        expr: COMPRESSION_RATIO
+        data_type: FLOAT
+      - name: OIL_PRESSURE
+        description: Oil system pressure (compressors only).
+        expr: OIL_PRESSURE
+        data_type: FLOAT
+    metrics:
+      - name: AVG_VIBRATION
+        description: Average vibration reading.
+        expr: AVG(VIBRATION)
+      - name: MAX_VIBRATION
+        description: Maximum vibration reading.
+        expr: MAX(VIBRATION)
+      - name: AVG_TEMPERATURE
+        description: Average temperature reading.
+        expr: AVG(TEMPERATURE)
+      - name: AVG_PRESSURE
+        description: Average pressure reading.
+        expr: AVG(PRESSURE)
+
+  - name: MAINTENANCE_LOGS
+    description: >
+      Historical maintenance records. Use for questions about maintenance
+      history, repair costs, and service patterns.
+    base_table:
+      database: PDM_DEMO
+      schema: RAW
+      table: MAINTENANCE_LOGS
+    dimensions:
+      - name: LOG_ID
+        description: Unique maintenance log identifier.
+        expr: LOG_ID
+        data_type: NUMBER
+        unique: true
+      - name: ASSET_ID
+        description: Asset that was serviced.
+        expr: ASSET_ID
+        data_type: NUMBER
+      - name: MAINTENANCE_TYPE
+        synonyms: ["type of maintenance", "work type"]
+        description: >
+          Type of maintenance. Values: INSPECTION, PREVENTIVE, CORRECTIVE,
+          EMERGENCY, OVERHAUL.
+        expr: MAINTENANCE_TYPE
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["INSPECTION", "PREVENTIVE", "CORRECTIVE", "EMERGENCY", "OVERHAUL"]
+      - name: DESCRIPTION
+        description: Free-text description of work performed.
+        expr: DESCRIPTION
+        data_type: VARCHAR
+      - name: TECHNICIAN_ID
+        description: ID of the technician who performed the work.
+        expr: TECHNICIAN_ID
+        data_type: VARCHAR
+    time_dimensions:
+      - name: TS
+        description: When the maintenance occurred.
+        expr: TS
+        data_type: TIMESTAMP_NTZ
+    facts:
+      - name: DURATION_HRS
+        description: Duration of the maintenance in hours.
+        expr: DURATION_HRS
+        data_type: FLOAT
+      - name: COST
+        synonyms: ["maintenance cost", "repair cost"]
+        description: Cost of the maintenance event in USD.
+        expr: COST
+        data_type: FLOAT
+    metrics:
+      - name: TOTAL_MAINTENANCE_COST
+        synonyms: ["total cost", "total repair cost"]
+        description: Total cost of all maintenance events.
+        expr: SUM(COST)
+      - name: AVG_MAINTENANCE_COST
+        description: Average cost per maintenance event.
+        expr: AVG(COST)
+      - name: MAINTENANCE_EVENT_COUNT
+        synonyms: ["number of maintenance events"]
+        description: Total number of maintenance events.
+        expr: COUNT(*)
+
+relationships:
+  - name: TELEMETRY_TO_FLEET
+    left_table: TELEMETRY
+    right_table: FLEET_KPI_VIEW
+    relationship_columns:
+      - left_column: ASSET_ID
+        right_column: ASSET_ID
+  - name: MAINTENANCE_TO_FLEET
+    left_table: MAINTENANCE_LOGS
+    right_table: FLEET_KPI_VIEW
+    relationship_columns:
+      - left_column: ASSET_ID
+        right_column: ASSET_ID
+
+verified_queries:
+  - name: critical_assets
+    question: How many assets are in critical condition?
+    sql: >
+      SELECT COUNT(*) AS CRITICAL_COUNT
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE RISK_LEVEL = 'CRITICAL'
+    use_as_onboarding_question: true
+
+  - name: avg_rul_by_type
+    question: What is the average RUL by asset type?
+    sql: >
+      SELECT ASSET_TYPE, ROUND(AVG(PREDICTED_RUL_DAYS), 1) AS AVG_RUL_DAYS
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      GROUP BY ASSET_TYPE
+
+  - name: lowest_rul
+    question: Which assets have the lowest remaining useful life?
+    sql: >
+      SELECT ASSET_ID, ASSET_TYPE, STATION_NAME, PREDICTED_CLASS,
+             ROUND(PREDICTED_RUL_DAYS, 1) AS RUL_DAYS, RISK_LEVEL
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE PREDICTED_RUL_DAYS IS NOT NULL
+      ORDER BY PREDICTED_RUL_DAYS ASC
+      LIMIT 10
+    use_as_onboarding_question: true
+
+  - name: risk_distribution
+    question: How many assets are at each risk level?
+    sql: >
+      SELECT RISK_LEVEL, COUNT(*) AS ASSET_COUNT
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      GROUP BY RISK_LEVEL
+      ORDER BY CASE RISK_LEVEL
+        WHEN 'CRITICAL' THEN 1
+        WHEN 'WARNING' THEN 2
+        WHEN 'HEALTHY' THEN 3
+      END
+
+  - name: failure_modes
+    question: What are the predicted failure modes across the fleet?
+    sql: >
+      SELECT PREDICTED_CLASS, COUNT(*) AS ASSET_COUNT
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE PREDICTED_CLASS IS NOT NULL
+      GROUP BY PREDICTED_CLASS
+      ORDER BY ASSET_COUNT DESC
+
+  - name: critical_by_station
+    question: Which stations have the most critical assets?
+    sql: >
+      SELECT STATION_NAME, COUNT(*) AS CRITICAL_ASSETS
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE RISK_LEVEL = 'CRITICAL'
+      GROUP BY STATION_NAME
+      ORDER BY CRITICAL_ASSETS DESC
+
+  - name: maintenance_cost_by_type
+    question: What is the maintenance cost by asset type?
+    sql: >
+      SELECT a.ASSET_TYPE, ROUND(SUM(m.COST), 2) AS TOTAL_COST,
+             ROUND(AVG(m.COST), 2) AS AVG_COST_PER_EVENT
+      FROM PDM_DEMO.RAW.MAINTENANCE_LOGS m
+      JOIN PDM_DEMO.RAW.ASSETS a ON m.ASSET_ID = a.ASSET_ID
+      GROUP BY a.ASSET_TYPE
+
+  - name: overdue_maintenance
+    question: Which assets are overdue for maintenance?
+    sql: >
+      SELECT ASSET_ID, ASSET_TYPE, STATION_NAME, DAYS_SINCE_MAINTENANCE,
+             PREDICTED_CLASS, RISK_LEVEL
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE DAYS_SINCE_MAINTENANCE > 90
+      ORDER BY DAYS_SINCE_MAINTENANCE DESC
+
+  - name: asset_35_vibration
+    question: What is the average vibration for asset 35 over the last 24 hours?
+    sql: >
+      SELECT ROUND(AVG(VIBRATION), 2) AS AVG_VIBRATION
+      FROM PDM_DEMO.RAW.TELEMETRY
+      WHERE ASSET_ID = 35
+        AND TS >= DATEADD('hour', -24, CURRENT_TIMESTAMP())
+
+  - name: fleet_summary
+    question: Show me the fleet summary with counts by type and risk
+    sql: >
+      SELECT ASSET_TYPE, RISK_LEVEL, COUNT(*) AS ASSET_COUNT,
+             ROUND(AVG(PREDICTED_RUL_DAYS), 1) AS AVG_RUL
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      GROUP BY ASSET_TYPE, RISK_LEVEL
+      ORDER BY ASSET_TYPE, CASE RISK_LEVEL
+        WHEN 'CRITICAL' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END
+    use_as_onboarding_question: true
+
+  - name: asset_35_prediction
+    question: What is the prediction for asset 35?
+    sql: >
+      SELECT ASSET_ID, ASSET_TYPE, STATION_NAME, PREDICTED_CLASS,
+             ROUND(PREDICTED_RUL_DAYS, 1) AS RUL_DAYS, RISK_LEVEL
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      WHERE ASSET_ID = 35
+
+  - name: emergency_maintenance
+    question: How many emergency maintenance events happened in the last 90 days?
+    sql: >
+      SELECT COUNT(*) AS EMERGENCY_COUNT
+      FROM PDM_DEMO.RAW.MAINTENANCE_LOGS
+      WHERE MAINTENANCE_TYPE = 'EMERGENCY'
+        AND TS >= DATEADD('day', -90, CURRENT_TIMESTAMP())
+
+  - name: pump_vs_compressor
+    question: Compare pump vs compressor health
+    sql: >
+      SELECT ASSET_TYPE,
+             COUNT(*) AS TOTAL,
+             SUM(CASE WHEN RISK_LEVEL = 'CRITICAL' THEN 1 ELSE 0 END) AS CRITICAL,
+             SUM(CASE WHEN RISK_LEVEL = 'WARNING' THEN 1 ELSE 0 END) AS WARNING,
+             SUM(CASE WHEN RISK_LEVEL = 'HEALTHY' THEN 1 ELSE 0 END) AS HEALTHY,
+             ROUND(AVG(PREDICTED_RUL_DAYS), 1) AS AVG_RUL
+      FROM PDM_DEMO.ANALYTICS.FLEET_KPI_VIEW
+      GROUP BY ASSET_TYPE

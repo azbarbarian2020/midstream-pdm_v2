@@ -1,0 +1,8 @@
+node_modules
+.next
+.git
+*.md
+.env*
+.DS_Store
+Dockerfile
+pdm_service.yaml

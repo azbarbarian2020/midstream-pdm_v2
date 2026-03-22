@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.next/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+frontend/.next/
+frontend/node_modules/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Snowflake CLI local config
+.snowflake/
+
+# Temp files
+*.bak
+/tmp/

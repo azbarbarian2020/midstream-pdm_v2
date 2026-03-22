@@ -1,0 +1,36 @@
+spec:
+  containers:
+    - name: frontend
+      image: __IMAGE_PATH__
+      env:
+        SNOWFLAKE_HOST: __SNOWFLAKE_HOST__
+        SNOWFLAKE_ACCOUNT: __SNOWFLAKE_ACCOUNT__
+        SNOWFLAKE_USER: __SNOWFLAKE_USER__
+        SNOWFLAKE_WAREHOUSE: PDM_DEMO_WH
+        SNOWFLAKE_DATABASE: PDM_DEMO
+        SNOWFLAKE_SCHEMA: APP
+      secrets:
+        - snowflakeSecret:
+            objectName: PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY
+        - snowflakeSecret:
+            objectName: PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PAT
+      readinessProbe:
+        port: 3000
+        path: /api/health
+      resources:
+        requests:
+          memory: 1G
+          cpu: 0.5
+        limits:
+          memory: 2G
+          cpu: 1
+  endpoints:
+    - name: ui
+      port: 3000
+      public: true
+  networkPolicyConfig:
+    allowInternetEgress: true

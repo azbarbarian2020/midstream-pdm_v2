@@ -1,0 +1,149 @@
+import snowflake from "snowflake-sdk";
+import fs from "fs";
+import path from "path";
+import os from "os";
+
+snowflake.configure({ logLevel: "ERROR" });
+
+let _connection: snowflake.Connection | null = null;
+
+const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || "";
+const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "";
+const PAT_TOKEN = process.env.SNOWFLAKE_PAT || "";
+
+function readConnectionConfig(): Record<string, string> {
+  const tomlPath = path.join(os.homedir(), ".snowflake", "connections.toml");
+  if (!fs.existsSync(tomlPath)) return {};
+  const raw = fs.readFileSync(tomlPath, "utf-8");
+  const connName = process.env.SNOWFLAKE_CONNECTION_NAME || "default";
+  const lines = raw.split("\n");
+  let inSection = false;
+  const cfg: Record<string, string> = {};
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) {
+      inSection = trimmed === `[${connName}]`;
+      continue;
+    }
+    if (inSection && trimmed.includes("=")) {
+      const [key, ...rest] = trimmed.split("=");
+      cfg[key.trim()] = rest.join("=").trim().replace(/^["']|["']$/g, "");
+    }
+  }
+  return cfg;
+}
+
+function getAuthToken(): string {
+  if (PAT_TOKEN) return PAT_TOKEN;
+  try {
+    if (fs.existsSync("/snowflake/session/token")) {
+      return fs.readFileSync("/snowflake/session/token", "utf8").trim();
+    }
+  } catch { }
+  return "";
+}
+
+function getConnectionConfig(): snowflake.ConnectionOptions {
+  const baseConfig = {
+    account: SNOWFLAKE_ACCOUNT,
+    host: SNOWFLAKE_HOST,
+    username: process.env.SNOWFLAKE_USER || "ADMIN",
+    warehouse: process.env.SNOWFLAKE_WAREHOUSE || "PDM_DEMO_WH",
+    database: process.env.SNOWFLAKE_DATABASE || "PDM_DEMO",
+    schema: process.env.SNOWFLAKE_SCHEMA || "APP",
+  };
+
+  const privateKey = process.env.SNOWFLAKE_PRIVATE_KEY;
+  if (privateKey) {
+    const key = privateKey.replace(/\\n/g, "\n");
+    console.log("Using Key-Pair JWT authentication");
+    return {
+      ...baseConfig,
+      authenticator: "SNOWFLAKE_JWT",
+      privateKey: key,
+    };
+  }
+
+  console.log("Using PAT authentication");
+  const pat = PAT_TOKEN;
+  return {
+    ...baseConfig,
+    password: pat,
+  };
+}
+
+function isRetryableError(err: unknown): boolean {
+  const error = err as { message?: string; code?: number };
+  return !!(
+    error.message?.includes("OAuth access token expired") ||
+    error.message?.includes("terminated connection") ||
+    error.code === 407002
+  );
+}
+
+function getConnection(): Promise<snowflake.Connection> {
+  return new Promise((resolve, reject) => {
+    if (_connection) {
+      resolve(_connection);
+      return;
+    }
+
+    const conn = snowflake.createConnection(getConnectionConfig());
+    conn.connect((err) => {
+      if (err) {
+        console.error("Connection error:", err.message);
+        reject(err);
+        return;
+      }
+      _connection = conn;
+      console.log("Connected to Snowflake");
+      resolve(conn);
+    });
+  });
+}
+
+export async function query<T = Record<string, unknown>>(
+  sql: string,
+  binds: snowflake.Binds = [],
+  retries = 1
+): Promise<T[]> {
+  try {
+    const conn = await getConnection();
+    return await new Promise((resolve, reject) => {
+      conn.execute({
+        sqlText: sql,
+        binds: binds as snowflake.Binds,
+        complete: (err, _stmt, rows) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve((rows || []) as T[]);
+        },
+      });
+    });
+  } catch (err) {
+    console.error("Query error:", (err as Error).message);
+    if (retries > 0 && isRetryableError(err)) {
+      _connection = null;
+      return query(sql, binds, retries - 1);
+    }
+    throw err;
+  }
+}
+
+export function getRestConfig(): { baseUrl: string; headers: Record<string, string> } {
+  const token = getAuthToken();
+  const isPat = !!PAT_TOKEN && token === PAT_TOKEN;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (isPat) {
+    headers["Authorization"] = `Bearer ${token}`;
+    headers["X-Snowflake-Authorization-Token-Type"] = "PROGRAMMATIC_ACCESS_TOKEN";
+  } else {
+    headers["Authorization"] = `Snowflake Token="${token}"`;
+  }
+  return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
+}

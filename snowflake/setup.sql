@@ -1,0 +1,290 @@
+-- ============================================================================
+-- Midstream Predictive Maintenance Demo - Snowflake Setup
+-- ============================================================================
+-- Run with ACCOUNTADMIN (demo accounts) or a role with CREATE DATABASE privilege.
+-- For production-like setup, use the DEMO_PDM_ADMIN role created below.
+-- ============================================================================
+
+USE ROLE ACCOUNTADMIN;
+
+-- ----------------------------------------------------------------------------
+-- 1. Warehouse
+-- ----------------------------------------------------------------------------
+CREATE WAREHOUSE IF NOT EXISTS PDM_DEMO_WH
+    WAREHOUSE_SIZE = 'MEDIUM'
+    AUTO_SUSPEND = 120
+    AUTO_RESUME = TRUE
+    INITIALLY_SUSPENDED = TRUE;
+
+-- ----------------------------------------------------------------------------
+-- 2. Database and Schemas
+-- ----------------------------------------------------------------------------
+CREATE DATABASE IF NOT EXISTS PDM_DEMO;
+
+CREATE SCHEMA IF NOT EXISTS PDM_DEMO.RAW;
+CREATE SCHEMA IF NOT EXISTS PDM_DEMO.ANALYTICS;
+CREATE SCHEMA IF NOT EXISTS PDM_DEMO.ML;
+CREATE SCHEMA IF NOT EXISTS PDM_DEMO.APP;
+
+USE DATABASE PDM_DEMO;
+USE WAREHOUSE PDM_DEMO_WH;
+
+-- ----------------------------------------------------------------------------
+-- 3. Core Tables (RAW schema)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE RAW.STATIONS (
+    STATION_ID      INT PRIMARY KEY,
+    NAME            VARCHAR(100) NOT NULL,
+    LAT             FLOAT NOT NULL,
+    LON             FLOAT NOT NULL,
+    REGION          VARCHAR(50),
+    STATION_TYPE    VARCHAR(50)
+);
+
+CREATE OR REPLACE TABLE RAW.ASSETS (
+    ASSET_ID        INT PRIMARY KEY,
+    STATION_ID      INT NOT NULL REFERENCES RAW.STATIONS(STATION_ID),
+    ASSET_TYPE      VARCHAR(20) NOT NULL,  -- PUMP | COMPRESSOR
+    MODEL_NAME      VARCHAR(100),
+    MANUFACTURER    VARCHAR(100),
+    INSTALL_DATE    DATE,
+    RATED_CAPACITY  FLOAT,
+    ATTRIBUTES      VARIANT
+);
+
+CREATE OR REPLACE TABLE RAW.TELEMETRY (
+    ASSET_ID            INT NOT NULL REFERENCES RAW.ASSETS(ASSET_ID),
+    TS                  TIMESTAMP_NTZ NOT NULL,
+    VIBRATION           FLOAT,
+    TEMPERATURE         FLOAT,
+    PRESSURE            FLOAT,
+    FLOW_RATE           FLOAT,
+    RPM                 FLOAT,
+    POWER_DRAW          FLOAT,
+    DIFFERENTIAL_PRESSURE FLOAT,
+    SUCTION_PRESSURE    FLOAT,
+    SEAL_TEMPERATURE    FLOAT,
+    CAVITATION_INDEX    FLOAT,
+    DISCHARGE_TEMP      FLOAT,
+    INLET_TEMP          FLOAT,
+    COMPRESSION_RATIO   FLOAT,
+    OIL_PRESSURE        FLOAT
+);
+
+CREATE OR REPLACE TABLE RAW.MAINTENANCE_LOGS (
+    LOG_ID          INT PRIMARY KEY AUTOINCREMENT,
+    ASSET_ID        INT NOT NULL REFERENCES RAW.ASSETS(ASSET_ID),
+    TS              TIMESTAMP_NTZ NOT NULL,
+    MAINTENANCE_TYPE VARCHAR(50),
+    DESCRIPTION     VARCHAR(2000),
+    TECHNICIAN_ID   VARCHAR(20),
+    PARTS_USED      VARIANT,
+    DURATION_HRS    FLOAT,
+    COST            FLOAT
+);
+
+CREATE OR REPLACE TABLE RAW.PARTS_INVENTORY (
+    PART_ID         INT PRIMARY KEY,
+    PART_NAME       VARCHAR(200) NOT NULL,
+    ASSET_TYPE      VARCHAR(20),
+    CATEGORY        VARCHAR(50),
+    UNIT_COST       FLOAT,
+    QTY_ON_HAND     INT,
+    LEAD_TIME_DAYS  INT
+);
+
+CREATE OR REPLACE TABLE RAW.TECHNICIANS (
+    TECH_ID             VARCHAR(20) PRIMARY KEY,
+    NAME                VARCHAR(100) NOT NULL,
+    HOME_BASE_LAT       FLOAT,
+    HOME_BASE_LON       FLOAT,
+    HOME_BASE_CITY      VARCHAR(100),
+    CERTIFICATIONS      VARIANT,
+    AVAILABILITY        VARCHAR(20) DEFAULT 'AVAILABLE',
+    YEARS_EXPERIENCE    INT DEFAULT 0,
+    SPECIALTY_NOTES     VARCHAR(500),
+    BIO                 VARCHAR(1000),
+    PHOTO_URL           VARCHAR(500),
+    HOURLY_RATE         FLOAT DEFAULT 85
+);
+
+-- ----------------------------------------------------------------------------
+-- 4. Analytics Tables
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE ANALYTICS.FEATURE_STORE (
+    ASSET_ID                INT NOT NULL,
+    AS_OF_TS                TIMESTAMP_NTZ NOT NULL,
+    ASSET_TYPE              VARCHAR(20),
+    VIBRATION_MEAN_24H      FLOAT,
+    VIBRATION_STD_24H       FLOAT,
+    VIBRATION_MAX_24H       FLOAT,
+    VIBRATION_TREND         FLOAT,
+    TEMPERATURE_MEAN_24H    FLOAT,
+    TEMPERATURE_STD_24H     FLOAT,
+    TEMPERATURE_MAX_24H     FLOAT,
+    TEMPERATURE_TREND       FLOAT,
+    PRESSURE_MEAN_24H       FLOAT,
+    PRESSURE_STD_24H        FLOAT,
+    FLOW_RATE_MEAN_24H      FLOAT,
+    RPM_MEAN_24H            FLOAT,
+    RPM_STD_24H             FLOAT,
+    POWER_DRAW_MEAN_24H     FLOAT,
+    DIFF_PRESSURE_MEAN_24H  FLOAT,
+    SEAL_TEMP_MEAN_24H      FLOAT,
+    DISCHARGE_TEMP_MEAN_24H FLOAT,
+    COMPRESSION_RATIO_MEAN  FLOAT,
+    OIL_PRESSURE_MEAN_24H   FLOAT,
+    DAYS_SINCE_MAINTENANCE  INT,
+    MAINTENANCE_COUNT_90D   INT,
+    OPERATING_HOURS         FLOAT,
+    FAILURE_LABEL           VARCHAR(30),
+    DAYS_TO_FAILURE         FLOAT
+);
+
+CREATE OR REPLACE TABLE ANALYTICS.PREDICTIONS (
+    ASSET_ID            INT NOT NULL,
+    AS_OF_TS            TIMESTAMP_NTZ NOT NULL,
+    PREDICTED_CLASS     VARCHAR(30),
+    CLASS_PROBABILITIES VARIANT,
+    PREDICTED_RUL_DAYS  FLOAT,
+    RISK_LEVEL          VARCHAR(20),
+    MODEL_VERSION       VARCHAR(20),
+    SCORED_AT           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------------------
+-- 5. APP Tables
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE APP.MANUALS (
+    DOC_ID          INT PRIMARY KEY,
+    ASSET_TYPE      VARCHAR(20),
+    MODEL_NAME      VARCHAR(100),
+    SECTION_TYPE    VARCHAR(50),
+    TITLE           VARCHAR(500),
+    CONTENT         VARCHAR(16000),
+    SOURCE_URL      VARCHAR(1000)
+);
+
+CREATE OR REPLACE TABLE APP.WORK_ORDERS (
+    WO_ID           INT PRIMARY KEY AUTOINCREMENT,
+    ASSET_ID        INT NOT NULL,
+    TECH_ID         VARCHAR(20),
+    PRIORITY        VARCHAR(20),
+    DESCRIPTION     VARCHAR(2000),
+    PARTS_NEEDED    VARIANT,
+    STATUS          VARCHAR(20) DEFAULT 'OPEN',
+    CREATED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    SCHEDULED_DATE  DATE,
+    ESTIMATED_HOURS FLOAT DEFAULT 4,
+    STATION_NAME    VARCHAR(200)
+);
+
+CREATE OR REPLACE TABLE APP.TECH_SCHEDULES (
+    SCHEDULE_ID     INT PRIMARY KEY AUTOINCREMENT,
+    TECH_ID         VARCHAR(20) NOT NULL,
+    SCHEDULE_DATE   DATE NOT NULL,
+    BLOCK_TYPE      VARCHAR(20) DEFAULT 'WORK_ORDER',
+    WO_ID           INT,
+    ASSET_ID        INT,
+    STATION_NAME    VARCHAR(200),
+    ESTIMATED_HOURS FLOAT DEFAULT 4,
+    NOTES           VARCHAR(500),
+    IS_BASELINE     BOOLEAN DEFAULT FALSE,
+    CREATED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------------------
+-- 6. Fleet KPI View (used by Cortex Analyst)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW ANALYTICS.FLEET_KPI_VIEW AS
+WITH latest_predictions AS (
+    SELECT *
+    FROM ANALYTICS.PREDICTIONS
+    WHERE AS_OF_TS <= '2026-03-13T00:00:00'::TIMESTAMP_NTZ
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY ASSET_ID ORDER BY AS_OF_TS DESC) = 1
+),
+latest_maintenance AS (
+    SELECT
+        ASSET_ID,
+        MAX(TS) AS LAST_MAINTENANCE_DATE,
+        COUNT(*) AS TOTAL_MAINTENANCE_COUNT
+    FROM RAW.MAINTENANCE_LOGS
+    GROUP BY ASSET_ID
+)
+SELECT
+    a.ASSET_ID,
+    a.ASSET_TYPE,
+    a.MODEL_NAME,
+    a.MANUFACTURER,
+    a.INSTALL_DATE,
+    a.RATED_CAPACITY,
+    s.STATION_ID,
+    s.NAME AS STATION_NAME,
+    s.LAT AS STATION_LAT,
+    s.LON AS STATION_LON,
+    s.REGION,
+    p.PREDICTED_CLASS,
+    p.CLASS_PROBABILITIES,
+    p.PREDICTED_RUL_DAYS,
+    p.RISK_LEVEL,
+    p.AS_OF_TS AS PREDICTION_TS,
+    m.LAST_MAINTENANCE_DATE,
+    DATEDIFF('day', m.LAST_MAINTENANCE_DATE, CURRENT_TIMESTAMP()) AS DAYS_SINCE_MAINTENANCE,
+    m.TOTAL_MAINTENANCE_COUNT
+FROM RAW.ASSETS a
+JOIN RAW.STATIONS s ON a.STATION_ID = s.STATION_ID
+LEFT JOIN latest_predictions p ON a.ASSET_ID = p.ASSET_ID
+LEFT JOIN latest_maintenance m ON a.ASSET_ID = m.ASSET_ID;
+
+-- ----------------------------------------------------------------------------
+-- 7. Stage for semantic model and manuals
+-- ----------------------------------------------------------------------------
+CREATE STAGE IF NOT EXISTS APP.MODELS
+    DIRECTORY = (ENABLE = TRUE)
+    ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+CREATE STAGE IF NOT EXISTS APP.DATA_STAGE
+    DIRECTORY = (ENABLE = TRUE)
+    ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- ----------------------------------------------------------------------------
+-- 8. SPCS Infrastructure
+-- ----------------------------------------------------------------------------
+CREATE IMAGE REPOSITORY IF NOT EXISTS APP.PDM_REPO;
+
+CREATE STAGE IF NOT EXISTS APP.SPECS
+    DIRECTORY = (ENABLE = TRUE)
+    ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+-- ----------------------------------------------------------------------------
+-- 9. Network Rules & External Access Integrations
+-- Created by setup.sh (requires account-specific host and secrets)
+
+-- ----------------------------------------------------------------------------
+-- 9. Demo Role (recommended safer path)
+-- ----------------------------------------------------------------------------
+CREATE ROLE IF NOT EXISTS DEMO_PDM_ADMIN;
+GRANT USAGE ON WAREHOUSE PDM_DEMO_WH TO ROLE DEMO_PDM_ADMIN;
+GRANT USAGE ON DATABASE PDM_DEMO TO ROLE DEMO_PDM_ADMIN;
+GRANT USAGE ON ALL SCHEMAS IN DATABASE PDM_DEMO TO ROLE DEMO_PDM_ADMIN;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.RAW TO ROLE DEMO_PDM_ADMIN;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ML TO ROLE DEMO_PDM_ADMIN;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.APP TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE TABLE ON SCHEMA PDM_DEMO.RAW TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE TABLE ON SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE TABLE ON SCHEMA PDM_DEMO.ML TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE TABLE ON SCHEMA PDM_DEMO.APP TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE VIEW ON SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;
+GRANT SELECT ON ALL VIEWS IN SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE STAGE ON SCHEMA PDM_DEMO.APP TO ROLE DEMO_PDM_ADMIN;
+GRANT READ, WRITE ON STAGE PDM_DEMO.APP.MODELS TO ROLE DEMO_PDM_ADMIN;
+GRANT READ, WRITE ON STAGE PDM_DEMO.APP.DATA_STAGE TO ROLE DEMO_PDM_ADMIN;
+GRANT USAGE ON IMAGE REPOSITORY PDM_DEMO.APP.PDM_REPO TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE SERVICE ON SCHEMA PDM_DEMO.APP TO ROLE DEMO_PDM_ADMIN;
+GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO ROLE DEMO_PDM_ADMIN;
+GRANT CREATE SNOWFLAKE.ML.MODEL ON SCHEMA PDM_DEMO.ML TO ROLE DEMO_PDM_ADMIN;
+
+GRANT ROLE DEMO_PDM_ADMIN TO ROLE ACCOUNTADMIN;
+
+SELECT 'Setup complete. Run seed_data.py next.' AS STATUS;
