@@ -32,7 +32,6 @@ check_prereqs() {
     done
     docker info &>/dev/null 2>&1 || { echo -e "  ${RED}✗ Docker daemon not running${NC}"; missing=1; }
     python3 -c "import snowflake.connector" 2>/dev/null || { echo -e "  ${RED}✗ snowflake-connector-python not installed (pip install snowflake-connector-python[pandas])${NC}"; missing=1; }
-    python3 -c "import numpy" 2>/dev/null || { echo -e "  ${RED}✗ numpy not installed (pip install numpy pandas)${NC}"; missing=1; }
     if [ $missing -eq 1 ]; then
         echo -e "\n${RED}Please install missing prerequisites and re-run.${NC}"
         exit 1
@@ -88,7 +87,7 @@ snow_sql() {
 # Step 1: Infrastructure (DDL)
 # -------------------------------------------------------------------------
 create_infrastructure() {
-    echo -e "${BOLD}[1/10] Creating database, schemas, tables, and stages...${NC}"
+    echo -e "${BOLD}[1/11] Creating database, schemas, tables, and stages...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/setup.sql"
     echo -e "${GREEN}✓ Infrastructure created${NC}\n"
 }
@@ -97,18 +96,20 @@ create_infrastructure() {
 # Step 2: Seed data
 # -------------------------------------------------------------------------
 seed_data() {
-    echo -e "${BOLD}[2/10] Seeding synthetic data (stations, assets, telemetry, maintenance, technicians, manuals)...${NC}"
+    echo -e "${BOLD}[2/11] Seeding synthetic data (stations, assets, telemetry, maintenance, technicians, manuals)...${NC}"
     echo "  This generates ~930K telemetry rows and may take a few minutes."
     SNOWFLAKE_CONNECTION_NAME="$CONNECTION_NAME" python3 "$SCRIPT_DIR/snowflake/seed_data.py"
     echo -e "${GREEN}✓ Data seeded${NC}\n"
 }
 
 # -------------------------------------------------------------------------
-# Step 3: Score fleet (generate features + predictions)
+# Step 3: Score fleet (create SP + run in Snowflake)
 # -------------------------------------------------------------------------
 score_fleet() {
-    echo -e "${BOLD}[3/10] Generating ML features and predictions...${NC}"
-    SNOWFLAKE_CONNECTION_NAME="$CONNECTION_NAME" python3 "$SCRIPT_DIR/snowflake/score_fleet.py"
+    echo -e "${BOLD}[3/11] Creating scoring procedure and generating predictions...${NC}"
+    echo "  Training ML models and scoring fleet (runs in Snowflake, ~2 min)..."
+    snow_sql -f "$SCRIPT_DIR/snowflake/score_fleet_sp.sql"
+    snow_sql -q "CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
     echo -e "${GREEN}✓ Predictions generated${NC}\n"
 }
 
@@ -116,7 +117,7 @@ score_fleet() {
 # Step 4: Cortex services
 # -------------------------------------------------------------------------
 create_cortex_services() {
-    echo -e "${BOLD}[4/10] Creating Cortex Search service and Semantic View...${NC}"
+    echo -e "${BOLD}[4/11] Creating Cortex Search service and Semantic View...${NC}"
     snow stage copy "$SCRIPT_DIR/snowflake/semantic_model.yaml" @PDM_DEMO.APP.MODELS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_services.sql"
     echo -e "${GREEN}✓ Cortex services created${NC}\n"
@@ -126,7 +127,7 @@ create_cortex_services() {
 # Step 5: Route planner + Agent
 # -------------------------------------------------------------------------
 create_agent() {
-    echo -e "${BOLD}[5/10] Creating stored procedures and Cortex Agent...${NC}"
+    echo -e "${BOLD}[5/11] Creating stored procedures and Cortex Agent...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/route_planner_sp.sql"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_agent.sql"
     echo -e "${GREEN}✓ Route planner and Agent created${NC}\n"
@@ -136,7 +137,7 @@ create_agent() {
 # Step 6: Network rules + External access (needs host placeholder filled)
 # -------------------------------------------------------------------------
 create_network_access() {
-    echo -e "${BOLD}[6/10] Creating network rules and external access integrations...${NC}"
+    echo -e "${BOLD}[7/11] Creating network rules and external access integrations...${NC}"
 
     snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.SNOWFLAKE_API_RULE
         TYPE = HOST_PORT MODE = EGRESS
@@ -163,32 +164,42 @@ create_network_access() {
 }
 
 # -------------------------------------------------------------------------
-# Step 7: Secrets (PAT + Key-pair)
+# Step 6: Service user + Secrets (PAT + Key-pair)
 # -------------------------------------------------------------------------
 create_secrets() {
-    echo -e "${BOLD}[7/10] Setting up authentication secrets...${NC}"
+    echo -e "${BOLD}[6/11] Setting up service account and authentication...${NC}"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  SERVICE ACCOUNT SETUP (Recommended)${NC}"
+    echo -e "${CYAN}  SERVICE ACCOUNT SETUP${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo "  For production use, create a dedicated service account:"
+    echo "  User-level PATs are being deprecated. This script will create"
+    echo "  a dedicated TYPE=SERVICE user for the application."
     echo ""
-    echo "    1. Run in Snowflake:"
-    echo "       CREATE USER IF NOT EXISTS PDM_SERVICE_USER"
-    echo "         TYPE = SERVICE"
-    echo "         DEFAULT_ROLE = DEMO_PDM_ADMIN"
-    echo "         DEFAULT_WAREHOUSE = PDM_DEMO_WH;"
-    echo "       GRANT ROLE DEMO_PDM_ADMIN TO USER PDM_SERVICE_USER;"
+
+    read -p "Create service user PDM_SERVICE_USER? (y/n) [y]: " CREATE_SVC
+    CREATE_SVC=${CREATE_SVC:-y}
+
+    if [[ "$CREATE_SVC" == "y" ]]; then
+        snow_sql -q "CREATE USER IF NOT EXISTS PDM_SERVICE_USER
+            TYPE = SERVICE
+            DEFAULT_ROLE = DEMO_PDM_ADMIN
+            DEFAULT_WAREHOUSE = PDM_DEMO_WH;"
+        snow_sql -q "GRANT ROLE DEMO_PDM_ADMIN TO USER PDM_SERVICE_USER;"
+        SERVICE_USER="PDM_SERVICE_USER"
+        echo -e "  ${GREEN}✓ Service user PDM_SERVICE_USER created${NC}"
+    else
+        SERVICE_USER="$SNOWFLAKE_USER"
+        echo "  Using current user: $SERVICE_USER"
+    fi
+
     echo ""
-    echo "    2. Generate a PAT for the service user via Snowsight:"
-    echo "       - Log in as an ACCOUNTADMIN"
-    echo "       - Go to Admin > Users & Roles > select PDM_SERVICE_USER"
-    echo "       - Under Authentication > Programmatic Access Tokens, create one"
-    echo "       - Select role DEMO_PDM_ADMIN"
-    echo "       - Copy the token value"
+    echo -e "${YELLOW}  Now generate a PAT for ${SERVICE_USER}:${NC}"
+    echo "    1. Open Snowsight as ACCOUNTADMIN"
+    echo "    2. Go to Admin > Users & Roles > ${SERVICE_USER}"
+    echo "    3. Under Authentication > Programmatic Access Tokens > Generate"
+    echo "    4. Select role DEMO_PDM_ADMIN, copy the token"
     echo ""
-    echo "  Alternatively, use your own user's PAT for quick testing."
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -208,8 +219,8 @@ create_secrets() {
     openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
     PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
 
-    read -p "Which user should get the RSA key? [${SNOWFLAKE_USER}]: " KEY_USER
-    KEY_USER=${KEY_USER:-$SNOWFLAKE_USER}
+    read -p "Which user should get the RSA key? [${SERVICE_USER}]: " KEY_USER
+    KEY_USER=${KEY_USER:-$SERVICE_USER}
     snow_sql -q "ALTER USER ${KEY_USER} SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
     echo -e "  ${GREEN}✓ Public key assigned to ${KEY_USER}${NC}"
 
@@ -231,7 +242,7 @@ create_secrets() {
 # Step 8: Build and push Docker image
 # -------------------------------------------------------------------------
 build_and_push() {
-    echo -e "${BOLD}[8/10] Building and pushing Docker image...${NC}"
+    echo -e "${BOLD}[8/11] Building and pushing Docker image...${NC}"
 
     snow spcs image-registry login --connection "$CONNECTION_NAME"
 
@@ -262,7 +273,7 @@ for row in data:
 # Step 9: Create compute pool + service
 # -------------------------------------------------------------------------
 deploy_service() {
-    echo -e "${BOLD}[9/10] Deploying SPCS service...${NC}"
+    echo -e "${BOLD}[9/11] Deploying SPCS service...${NC}"
 
     snow_sql -q "CREATE COMPUTE POOL IF NOT EXISTS PDM_DEMO_POOL
         MIN_NODES = 1 MAX_NODES = 1
@@ -280,7 +291,7 @@ for row in data:
 ")
     IMAGE_PATH="${REPO_URL}/pdm_frontend:v1"
 
-    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SNOWFLAKE_USER}|g" \
+    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SERVICE_USER:-$SNOWFLAKE_USER}|g" \
         "$SCRIPT_DIR/frontend/pdm_service.yaml.template" > /tmp/pdm_service.yaml
 
     snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
@@ -317,7 +328,7 @@ except:
 # Step 10: Show results
 # -------------------------------------------------------------------------
 show_results() {
-    echo -e "${BOLD}[10/10] Getting service endpoint...${NC}"
+    echo -e "${BOLD}[10/11] Getting service endpoint...${NC}"
     ENDPOINT=$(snow_sql -q "SHOW ENDPOINTS IN SERVICE PDM_DEMO.APP.PDM_FRONTEND;" --format json 2>/dev/null | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -333,11 +344,12 @@ for row in data:
     echo -e "${GREEN}  Setup Complete!${NC}"
     echo -e "${GREEN}=================================================================${NC}"
     echo ""
-    echo -e "  App URL:    ${CYAN}https://${ENDPOINT}${NC}"
-    echo -e "  Account:    ${ACCOUNT_LOCATOR}"
-    echo -e "  Database:   PDM_DEMO"
-    echo -e "  Service:    PDM_DEMO.APP.PDM_FRONTEND"
-    echo -e "  Pool:       PDM_DEMO_POOL"
+    echo -e "  App URL:      ${CYAN}https://${ENDPOINT}${NC}"
+    echo -e "  Account:      ${ACCOUNT_LOCATOR}"
+    echo -e "  Database:     PDM_DEMO"
+    echo -e "  Service:      PDM_DEMO.APP.PDM_FRONTEND"
+    echo -e "  Service User: ${SERVICE_USER:-$SNOWFLAKE_USER}"
+    echo -e "  Pool:         PDM_DEMO_POOL"
     echo ""
     echo "  Demo date is frozen at 2026-03-13. Use the Time Travel"
     echo "  slider in the app to simulate past and future states."
@@ -352,16 +364,16 @@ for row in data:
 main() {
     check_prereqs
     setup_connection
-    create_infrastructure
-    seed_data
-    score_fleet
-    create_cortex_services
-    create_agent
-    create_secrets
-    create_network_access
-    build_and_push
-    deploy_service
-    show_results
+    create_infrastructure    # Step 1: DDL (creates DEMO_PDM_ADMIN role)
+    seed_data                # Step 2: Seed data
+    score_fleet              # Step 3: Create SP + generate predictions
+    create_cortex_services   # Step 4: Cortex Search + Semantic View
+    create_agent             # Step 5: Route planner + Agent
+    create_secrets           # Step 6: Service user (after role exists!) + PAT + key-pair
+    create_network_access    # Step 7: Network rules + EAI
+    build_and_push           # Step 8: Docker build + push
+    deploy_service           # Step 9: SPCS service
+    show_results             # Step 10: Show endpoint
 
     echo ""
     echo "To reset the demo state (clear scheduled work orders):"

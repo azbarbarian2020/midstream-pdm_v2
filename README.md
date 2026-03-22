@@ -48,21 +48,29 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 - **ACCOUNTADMIN** role (or equivalent privileges)
 - **Docker Desktop** (for building the container image)
 - **Snowflake CLI** (`pip install snowflake-cli`)
-- **Python 3.11+** with packages: `snowflake-connector-python[pandas]`, `numpy`, `pandas`, `scikit-learn`, `xgboost`, `imbalanced-learn`
+- **Python 3.11+** with `snowflake-connector-python[pandas]` (for data seeding only)
 - **openssl** (for RSA key generation)
 
 ### Install Python Dependencies
 
 ```bash
-pip install snowflake-connector-python[pandas] numpy pandas scikit-learn xgboost imbalanced-learn
+pip install snowflake-connector-python[pandas]
 ```
 
-## Service Account Setup (Recommended)
+> **Note**: ML packages (scikit-learn, numpy, etc.) run inside Snowflake via the `SCORE_FLEET_SP()` stored procedure — no local ML installation needed.
 
-User-level Programmatic Access Tokens (PATs) are being deprecated. Create a dedicated service account instead:
+## Service Account
+
+User-level Programmatic Access Tokens (PATs) are being deprecated. The `setup.sh` script handles service account creation automatically:
+
+1. **setup.sql** creates the `DEMO_PDM_ADMIN` role and all objects
+2. **setup.sh** then creates `PDM_SERVICE_USER` (TYPE=SERVICE) and grants the role
+3. The script pauses and prompts you to generate a PAT in Snowsight
+
+If you prefer manual setup, create the service user **after** running `setup.sql`:
 
 ```sql
--- Run as ACCOUNTADMIN
+-- Run as ACCOUNTADMIN (after setup.sql has created DEMO_PDM_ADMIN)
 CREATE USER IF NOT EXISTS PDM_SERVICE_USER
   TYPE = SERVICE
   DEFAULT_ROLE = DEMO_PDM_ADMIN
@@ -71,14 +79,7 @@ CREATE USER IF NOT EXISTS PDM_SERVICE_USER
 GRANT ROLE DEMO_PDM_ADMIN TO USER PDM_SERVICE_USER;
 ```
 
-Then generate a PAT for the service user:
-1. Log into Snowsight as **ACCOUNTADMIN**
-2. Go to **Admin > Users & Roles** > select **PDM_SERVICE_USER**
-3. Under **Authentication > Programmatic Access Tokens**, click **Generate**
-4. Select role **DEMO_PDM_ADMIN**
-5. Copy the token value — you'll need it during setup
-
-> **Note**: The DEMO_PDM_ADMIN role is created by setup.sql. Run `setup.sh` first, then come back to create the PAT before the script prompts for it. The setup script will pause and guide you through this.
+Then generate a PAT in Snowsight: **Admin > Users & Roles > PDM_SERVICE_USER > Authentication > Programmatic Access Tokens > Generate** (select role DEMO_PDM_ADMIN).
 
 ## Quick Start
 
@@ -93,9 +94,9 @@ The setup script will:
 2. Auto-detect your account, host, and registry
 3. Create all database objects (tables, views, stages, role)
 4. Generate synthetic data (~930K telemetry rows)
-5. Train ML models and score the fleet
+5. Train ML models and score the fleet (runs in Snowflake via stored procedure)
 6. Create Cortex Search, Semantic View, and Agent
-7. Prompt for PAT and generate RSA key pair
+7. Create service user, prompt for PAT, and generate RSA key pair
 8. Build and push the Docker image
 9. Deploy the SPCS service
 10. Print the application URL
@@ -116,8 +117,9 @@ snow sql --connection <conn> -f snowflake/setup.sql
 # 3. Seed data
 SNOWFLAKE_CONNECTION_NAME=<conn> python3 snowflake/seed_data.py
 
-# 4. Generate predictions
-SNOWFLAKE_CONNECTION_NAME=<conn> python3 snowflake/score_fleet.py
+# 4. Generate predictions (runs in Snowflake, no local ML needed)
+snow sql --connection <conn> -f snowflake/score_fleet_sp.sql
+snow sql --connection <conn> -q "CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
 
 # 5. Upload semantic model and create Cortex services
 snow stage copy snowflake/semantic_model.yaml @PDM_DEMO.APP.MODELS/ \
@@ -220,7 +222,8 @@ setup.sh                      # Automated setup (run this)
 teardown.sh                   # Complete cleanup
 snowflake/setup.sql           # DDL: database, tables, views, stages, role
 snowflake/seed_data.py        # Synthetic data generator
-snowflake/score_fleet.py      # ML scoring + prediction generation
+snowflake/score_fleet_sp.sql   # ML scoring stored procedure (runs in Snowflake)
+snowflake/score_fleet.py      # Alternative: local scoring script (reference)
 snowflake/cortex_services.sql # Cortex Search + Semantic View
 snowflake/cortex_agent.sql    # PDM_AGENT definition
 snowflake/route_planner_sp.sql # PLAN_ROUTE stored procedure
