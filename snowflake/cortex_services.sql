@@ -47,17 +47,10 @@ CREATE OR REPLACE CORTEX SEARCH SERVICE APP.MANUAL_SEARCH
 -- The semantic model YAML should be uploaded to @PDM_DEMO.APP.MODELS/semantic_model.yaml
 
 -- ----------------------------------------------------------------------------
--- 3. Create Semantic View from the YAML
--- Note: Use Snowflake CLI or UI to create semantic view from YAML.
--- Alternative: create semantic view directly via SQL
+-- 3. Semantic View
+-- Created by setup.sh using SYSTEM$CREATE_SEMANTIC_VIEW_FROM_YAML()
+-- Grant is issued by setup.sh after the view is created.
 -- ----------------------------------------------------------------------------
--- After uploading the YAML, create the semantic view:
--- This uses the stage file approach:
-CREATE OR REPLACE SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW
-  FROM @PDM_DEMO.APP.MODELS/semantic_model.yaml;
-
--- Grant access
-GRANT SELECT ON SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW TO ROLE DEMO_PDM_ADMIN;
 GRANT USAGE ON CORTEX SEARCH SERVICE PDM_DEMO.APP.MANUAL_SEARCH TO ROLE DEMO_PDM_ADMIN;
 
 SELECT 'Cortex Search + Analyst setup complete.' AS STATUS;

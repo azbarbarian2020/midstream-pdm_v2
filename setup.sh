@@ -120,6 +120,13 @@ create_cortex_services() {
     echo -e "${BOLD}[4/11] Creating Cortex Search service and Semantic View...${NC}"
     snow stage copy "$SCRIPT_DIR/snowflake/semantic_model.yaml" @PDM_DEMO.APP.MODELS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_services.sql"
+
+    echo "  Creating semantic view from YAML..."
+    YAML_CONTENT=$(cat "$SCRIPT_DIR/snowflake/semantic_model.yaml")
+    YAML_ESCAPED=$(echo "$YAML_CONTENT" | sed "s/'/''/g")
+    snow_sql -q "CALL SYSTEM\$CREATE_SEMANTIC_VIEW_FROM_YAML('PDM_DEMO.APP', '${YAML_ESCAPED}');"
+    snow_sql -q "GRANT SELECT ON SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW TO ROLE DEMO_PDM_ADMIN;"
+
     echo -e "${GREEN}✓ Cortex services created${NC}\n"
 }
 
