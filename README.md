@@ -48,16 +48,10 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 - **ACCOUNTADMIN** role (or equivalent privileges)
 - **Docker Desktop** (for building the container image)
 - **Snowflake CLI** (`pip install snowflake-cli`)
-- **Python 3.11+** with `snowflake-connector-python[pandas]` (for data seeding only)
+- **Python 3.11+** (for JSON parsing in setup script)
 - **openssl** (for RSA key generation)
 
-### Install Python Dependencies
-
-```bash
-pip install snowflake-connector-python[pandas]
-```
-
-> **Note**: ML packages (scikit-learn, numpy, etc.) run inside Snowflake via the `SCORE_FLEET_SP()` stored procedure — no local ML installation needed.
+> **Note**: Seed data is included as static CSV exports in the `data/` directory. ML scoring runs inside Snowflake via `SCORE_FLEET_SP()` — no local ML or Python packages needed.
 
 ## Service Account
 
@@ -93,7 +87,7 @@ The setup script will:
 1. Prompt for your Snowflake CLI connection name
 2. Auto-detect your account, host, and registry
 3. Create all database objects (tables, views, stages, role)
-4. Generate synthetic data (~930K telemetry rows)
+4. Load seed data from static CSV exports (~930K telemetry rows)
 5. Train ML models and score the fleet (runs in Snowflake via stored procedure)
 6. Create Cortex Search, Semantic View, and Agent
 7. Create service user, prompt for PAT, and generate RSA key pair
@@ -114,8 +108,9 @@ snow connection add
 # 2. Create infrastructure
 snow sql --connection <conn> -f snowflake/setup.sql
 
-# 3. Seed data
-SNOWFLAKE_CONNECTION_NAME=<conn> python3 snowflake/seed_data.py
+# 3. Seed data (upload CSVs from data/ to stage, then COPY INTO tables)
+snow stage copy data/ @PDM_DEMO.APP.DATA_STAGE/seed/ --overwrite --database PDM_DEMO --schema APP --connection <conn>
+# Then run COPY INTO for each table (see setup.sh seed_data function)
 
 # 4. Generate predictions (runs in Snowflake, no local ML needed)
 snow sql --connection <conn> -f snowflake/score_fleet_sp.sql
@@ -221,7 +216,7 @@ The demo data is frozen at **2026-03-13**. The Time Travel slider simulates diff
 setup.sh                      # Automated setup (run this)
 teardown.sh                   # Complete cleanup
 snowflake/setup.sql           # DDL: database, tables, views, stages, role
-snowflake/seed_data.py        # Synthetic data generator
+data/                         # Static seed data (gzipped CSVs)
 snowflake/score_fleet_sp.sql   # ML scoring stored procedure (runs in Snowflake)
 snowflake/score_fleet.py      # Alternative: local scoring script (reference)
 snowflake/cortex_services.sql # Cortex Search + Semantic View

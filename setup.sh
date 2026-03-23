@@ -31,7 +31,6 @@ check_prereqs() {
         fi
     done
     docker info &>/dev/null 2>&1 || { echo -e "  ${RED}✗ Docker daemon not running${NC}"; missing=1; }
-    python3 -c "import snowflake.connector" 2>/dev/null || { echo -e "  ${RED}✗ snowflake-connector-python not installed (pip install snowflake-connector-python[pandas])${NC}"; missing=1; }
     if [ $missing -eq 1 ]; then
         echo -e "\n${RED}Please install missing prerequisites and re-run.${NC}"
         exit 1
@@ -96,10 +95,46 @@ create_infrastructure() {
 # Step 2: Seed data
 # -------------------------------------------------------------------------
 seed_data() {
-    echo -e "${BOLD}[2/11] Seeding synthetic data (stations, assets, telemetry, maintenance, technicians, manuals)...${NC}"
-    echo "  This generates ~930K telemetry rows and may take a few minutes."
-    SNOWFLAKE_CONNECTION_NAME="$CONNECTION_NAME" python3 "$SCRIPT_DIR/snowflake/seed_data.py"
-    echo -e "${GREEN}✓ Data seeded${NC}\n"
+    echo -e "${BOLD}[2/11] Loading seed data from static exports...${NC}"
+    echo "  Uploading CSV files to DATA_STAGE..."
+
+    snow stage copy "$SCRIPT_DIR/data/" @PDM_DEMO.APP.DATA_STAGE/seed/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
+
+    echo "  Loading tables from CSV..."
+    local CSV_FORMAT="TYPE = CSV COMPRESSION = GZIP FIELD_OPTIONALLY_ENCLOSED_BY = '\"' SKIP_HEADER = 1 FIELD_DELIMITER = ',' NULL_IF = ('')"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.STATIONS;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.STATIONS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_stations.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.ASSETS;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.ASSETS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_assets.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.TECHNICIANS;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.TECHNICIANS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_technicians.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.PARTS_INVENTORY;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.PARTS_INVENTORY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_parts_inventory.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.MAINTENANCE_LOGS;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.MAINTENANCE_LOGS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_maintenance_logs.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    echo "  Loading telemetry (~930K rows)..."
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.TELEMETRY;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.TELEMETRY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_telemetry.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.ANALYTICS.FEATURE_STORE;"
+    snow_sql -q "COPY INTO PDM_DEMO.ANALYTICS.FEATURE_STORE FROM @PDM_DEMO.APP.DATA_STAGE/seed/analytics_feature_store.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.MANUALS;"
+    snow_sql -q "COPY INTO PDM_DEMO.APP.MANUALS FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_manuals.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.WORK_ORDERS;"
+    snow_sql -q "COPY INTO PDM_DEMO.APP.WORK_ORDERS FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_work_orders.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.TECH_SCHEDULES;"
+    snow_sql -q "COPY INTO PDM_DEMO.APP.TECH_SCHEDULES FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_tech_schedules.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    echo -e "${GREEN}✓ Seed data loaded${NC}\n"
 }
 
 # -------------------------------------------------------------------------
