@@ -145,5 +145,6 @@ export function getRestConfig(): { baseUrl: string; headers: Record<string, stri
   } else {
     headers["Authorization"] = `Snowflake Token="${token}"`;
   }
+  headers["X-Snowflake-Role"] = process.env.SNOWFLAKE_ROLE || "DEMO_PDM_ADMIN";
   return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
 }
