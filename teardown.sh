@@ -22,7 +22,7 @@ echo "  - Role: DEMO_PDM_ADMIN"
 echo "  - Warehouse: PDM_DEMO_WH"
 echo ""
 read -p "Are you sure? (type 'yes' to confirm): " CONFIRM
-[ "$CONFIRM" != "yes" ] && { echo "Cancelled."; exit 0; }
+if [ "$CONFIRM" != "yes" ]; then echo "Cancelled."; exit 0; fi
 
 echo ""
 read -p "Enter Snowflake CLI connection name: " CONNECTION_NAME

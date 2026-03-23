@@ -122,9 +122,12 @@ create_cortex_services() {
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_services.sql"
 
     echo "  Creating semantic view from YAML..."
-    YAML_CONTENT=$(cat "$SCRIPT_DIR/snowflake/semantic_model.yaml")
-    YAML_ESCAPED=$(echo "$YAML_CONTENT" | sed "s/'/''/g")
-    snow_sql -q "CALL SYSTEM\$CREATE_SEMANTIC_VIEW_FROM_YAML('PDM_DEMO.APP', '${YAML_ESCAPED}');"
+    local tmp_sv_sql=$(mktemp /tmp/create_sv_XXXXXX.sql)
+    echo "CALL SYSTEM\$CREATE_SEMANTIC_VIEW_FROM_YAML('PDM_DEMO.APP', \$\$" > "$tmp_sv_sql"
+    cat "$SCRIPT_DIR/snowflake/semantic_model.yaml" >> "$tmp_sv_sql"
+    echo "\$\$);" >> "$tmp_sv_sql"
+    snow_sql -f "$tmp_sv_sql"
+    rm -f "$tmp_sv_sql"
     snow_sql -q "GRANT SELECT ON SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW TO ROLE DEMO_PDM_ADMIN;"
 
     echo -e "${GREEN}✓ Cortex services created${NC}\n"
@@ -154,14 +157,29 @@ create_network_access() {
         TYPE = HOST_PORT MODE = EGRESS
         VALUE_LIST = ('tile.openstreetmap.org:443');"
 
-    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE
-        TYPE = HOST_PORT MODE = EGRESS
-        VALUE_LIST = ('*.s3.*.amazonaws.com:443');"
+    S3_HOST=$(snow_sql -q "SELECT PARSE_JSON(VALUE)['host']::VARCHAR AS host
+        FROM TABLE(FLATTEN(INPUT => PARSE_JSON(SYSTEM\$ALLOWLIST())))
+        WHERE PARSE_JSON(VALUE)['type']::VARCHAR = 'STAGE'
+          AND PARSE_JSON(VALUE)['host']::VARCHAR LIKE '%s3.%amazonaws.com'
+        LIMIT 1;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['HOST'])" 2>/dev/null || echo "")
 
-    snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
-        ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE)
-        ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
-        ENABLED = TRUE;"
+    if [ -n "$S3_HOST" ]; then
+        echo "  S3 stage host: $S3_HOST"
+        snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE
+            TYPE = HOST_PORT MODE = EGRESS
+            VALUE_LIST = ('${S3_HOST}:443');"
+
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
+            ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE)
+            ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
+            ENABLED = TRUE;"
+    else
+        echo -e "  ${YELLOW}Could not detect S3 stage host; creating EAI without S3 rule${NC}"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
+            ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE)
+            ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
+            ENABLED = TRUE;"
+    fi
 
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS
         ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE)
@@ -212,7 +230,7 @@ create_secrets() {
 
     read -sp "Enter PAT (Programmatic Access Token): " PAT_VALUE
     echo ""
-    [ -z "$PAT_VALUE" ] && { echo -e "${RED}PAT is required.${NC}"; exit 1; }
+    if [ -z "$PAT_VALUE" ]; then echo -e "${RED}PAT is required.${NC}"; exit 1; fi
 
     snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
         TYPE = GENERIC_STRING
