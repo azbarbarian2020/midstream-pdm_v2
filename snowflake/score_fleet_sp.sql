@@ -33,7 +33,7 @@ def run(session):
     session.sql(''USE DATABASE PDM_DEMO'').collect()
     session.sql(''USE SCHEMA ANALYTICS'').collect()
 
-    pdf = session.table(''PDM_DEMO.ANALYTICS.FEATURE_STORE'').to_pandas()
+    pdf = session.sql(''SELECT * FROM PDM_DEMO.ANALYTICS.FEATURE_STORE ORDER BY ASSET_ID, AS_OF_TS'').to_pandas()
 
     pdf[''IS_PUMP''] = (pdf[''ASSET_TYPE''] == ''PUMP'').astype(int)
     pdf[''VIB_TEMP_INTERACTION''] = pdf[''VIBRATION_MEAN_24H''] * pdf[''TEMPERATURE_MEAN_24H''] / 1000
@@ -99,7 +99,7 @@ def run(session):
     reg.fit(X[nn_mask], y_rul[nn_mask])
     mae = mean_absolute_error(y_rul[nn_mask], reg.predict(X[nn_mask]))
 
-    assets_pdf = session.sql(''SELECT ASSET_ID, ASSET_TYPE FROM PDM_DEMO.RAW.ASSETS'').to_pandas()
+    assets_pdf = session.sql(''SELECT ASSET_ID, ASSET_TYPE FROM PDM_DEMO.RAW.ASSETS ORDER BY ASSET_ID'').to_pandas()
     asset_map = {int(r.ASSET_ID): r.ASSET_TYPE for _, r in assets_pdf.iterrows()}
 
     baselines = session.sql("""
@@ -117,7 +117,7 @@ def run(session):
           AVG(COMPRESSION_RATIO_MEAN) as COMPRESSION_RATIO_MEAN, AVG(OIL_PRESSURE_MEAN_24H) as OIL_PRESSURE_MEAN_24H,
           AVG(DAYS_SINCE_MAINTENANCE) as DAYS_SINCE_MAINTENANCE,
           AVG(MAINTENANCE_COUNT_90D) as MAINTENANCE_COUNT_90D, AVG(OPERATING_HOURS) as OPERATING_HOURS
-        FROM PDM_DEMO.ANALYTICS.FEATURE_STORE WHERE FAILURE_LABEL = ''NORMAL'' GROUP BY ASSET_ID
+        FROM PDM_DEMO.ANALYTICS.FEATURE_STORE WHERE FAILURE_LABEL = ''NORMAL'' GROUP BY ASSET_ID ORDER BY ASSET_ID
     """).to_pandas().set_index(''ASSET_ID'')
 
     DEGRADING = {
@@ -195,7 +195,8 @@ def run(session):
         return row
 
     snapshots = []
-    for aid, atype in asset_map.items():
+    for aid in sorted(asset_map.keys()):
+        atype = asset_map[aid]
         deg = DEGRADING.get(aid)
         for doff in TIME_OFFSETS:
             snap = gen_snap(aid, atype, doff, deg)

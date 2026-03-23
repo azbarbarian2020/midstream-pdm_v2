@@ -138,3 +138,7 @@ def plan_route(session, tech_id, primary_asset_id, horizon_days, max_stops, as_o
         "estimated_travel_miles": round(total_miles, 1)
     })
 $$;
+
+GRANT USAGE ON PROCEDURE PDM_DEMO.APP.PLAN_ROUTE(VARCHAR, INT, INT, INT, VARCHAR) TO ROLE DEMO_PDM_ADMIN;
+
+SELECT 'PLAN_ROUTE created.' AS STATUS;

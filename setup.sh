@@ -258,13 +258,15 @@ create_secrets() {
             TYPE = SERVICE
             DEFAULT_ROLE = DEMO_PDM_ADMIN
             DEFAULT_WAREHOUSE = PDM_DEMO_WH;"
-        snow_sql -q "GRANT ROLE DEMO_PDM_ADMIN TO USER PDM_SERVICE_USER;"
         SERVICE_USER="PDM_SERVICE_USER"
         echo -e "  ${GREEN}✓ Service user PDM_SERVICE_USER created${NC}"
     else
         SERVICE_USER="$SNOWFLAKE_USER"
         echo "  Using current user: $SERVICE_USER"
     fi
+
+    snow_sql -q "GRANT ROLE DEMO_PDM_ADMIN TO USER ${SERVICE_USER};"
+    echo -e "  ${GREEN}✓ Role DEMO_PDM_ADMIN granted to ${SERVICE_USER}${NC}"
 
     echo ""
     echo -e "${YELLOW}  Now generate a PAT for ${SERVICE_USER}:${NC}"
