@@ -132,19 +132,23 @@ export async function query<T = Record<string, unknown>>(
   }
 }
 
-export function getRestConfig(): { baseUrl: string; headers: Record<string, string> } {
+export function getRestConfig(): { baseUrl: string; headers: Record<string, string>; authMethod: string } {
   const token = getAuthToken();
   const isPat = !!PAT_TOKEN && token === PAT_TOKEN;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
+  let authMethod: string;
   if (isPat) {
     headers["Authorization"] = `Bearer ${token}`;
     headers["X-Snowflake-Authorization-Token-Type"] = "PROGRAMMATIC_ACCESS_TOKEN";
+    authMethod = "PAT";
   } else {
+    console.warn("[Auth] SNOWFLAKE_PAT not set — falling back to SPCS session token. Cortex Agent/Analyst calls WILL FAIL with this auth method.");
     headers["Authorization"] = `Snowflake Token="${token}"`;
+    authMethod = "SPCS_OAUTH";
   }
   headers["X-Snowflake-Role"] = process.env.SNOWFLAKE_ROLE || "DEMO_PDM_ADMIN";
-  return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
+  return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers, authMethod };
 }
