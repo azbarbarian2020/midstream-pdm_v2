@@ -114,6 +114,19 @@ score_fleet() {
 }
 
 # -------------------------------------------------------------------------
+# Step 3b: Re-grant privileges on tables created by seed_data / score_fleet
+# -------------------------------------------------------------------------
+regrant_table_privileges() {
+    echo -e "${BOLD}[3b/11] Re-granting table privileges to DEMO_PDM_ADMIN...${NC}"
+    snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.RAW TO ROLE DEMO_PDM_ADMIN;"
+    snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;"
+    snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ML TO ROLE DEMO_PDM_ADMIN;"
+    snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.APP TO ROLE DEMO_PDM_ADMIN;"
+    snow_sql -q "GRANT SELECT ON ALL VIEWS IN SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;"
+    echo -e "${GREEN}✓ Table privileges re-granted${NC}\n"
+}
+
+# -------------------------------------------------------------------------
 # Step 4: Cortex services
 # -------------------------------------------------------------------------
 create_cortex_services() {
@@ -392,6 +405,7 @@ main() {
     create_infrastructure    # Step 1: DDL (creates DEMO_PDM_ADMIN role)
     seed_data                # Step 2: Seed data
     score_fleet              # Step 3: Create SP + generate predictions
+    regrant_table_privileges # Step 3b: Re-grant after tables created/recreated
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
     create_secrets           # Step 6: Service user (after role exists!) + PAT + key-pair
