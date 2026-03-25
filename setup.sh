@@ -187,8 +187,9 @@ create_cortex_services() {
 create_agent() {
     echo -e "${BOLD}[5/11] Creating stored procedures and Cortex Agent...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/route_planner_sp.sql"
+    snow_sql -f "$SCRIPT_DIR/snowflake/reset_demo.sql"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_agent.sql"
-    echo -e "${GREEN}✓ Route planner and Agent created${NC}\n"
+    echo -e "${GREEN}✓ Route planner, Reset Demo, and Agent created${NC}\n"
 }
 
 # -------------------------------------------------------------------------
