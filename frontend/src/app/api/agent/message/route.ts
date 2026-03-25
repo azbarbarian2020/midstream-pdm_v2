@@ -14,10 +14,9 @@ export async function POST(req: NextRequest) {
     messageText = `[Time context: Viewing predictions as of ${body.as_of_ts} (${label}). Use this timestamp when querying fleet_analyst and plan_route.]\n\n${messageText}`;
   }
 
-  const { baseUrl, headers, authMethod } = getRestConfig();
+  const { baseUrl, headers } = getRestConfig();
   const url = `${baseUrl}/api/v2/databases/PDM_DEMO/schemas/APP/agents/PDM_AGENT:run`;
   console.log(`[Agent] POST ${url}`);
-  console.log(`[Agent] Auth method: ${authMethod}, Role: ${headers["X-Snowflake-Role"]}`);
   console.log(`[Agent] Auth header: ${headers.Authorization?.substring(0, 30)}...`);
 
   try {

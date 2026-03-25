@@ -62,7 +62,7 @@ export const api = {
     return resp;
   },
 
-  planRoute: (data: { tech_id: string; primary_asset_id: number; horizon_days?: number; max_stops?: number; as_of_ts?: string }) =>
+  planRoute: (data: { tech_id: string; primary_asset_id: number; horizon_days?: number; max_stops?: number; as_of_ts?: string; allow_overtime?: boolean }) =>
     fetchJSON<any>("/api/dispatch/plan-route", { method: "POST", body: JSON.stringify(data) }),
 
   bundleWorkOrders: (data: { tech_id: string; stops: any[] }) =>
