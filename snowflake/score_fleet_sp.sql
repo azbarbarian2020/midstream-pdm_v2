@@ -165,6 +165,7 @@ def run(session):
         return result
 
     def gen_snap(aid, atype, doff, deg):
+        np.random.seed(42 + aid + doff)  # Deterministic seed per asset+day for reproducible noise
         is_pump = atype == ''PUMP''
         if deg and aid in deg_curves:
             target = deg[''target_rul'']
