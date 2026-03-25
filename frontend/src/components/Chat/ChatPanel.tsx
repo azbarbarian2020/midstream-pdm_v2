@@ -33,7 +33,7 @@ export function ChatPanel() {
       clearPending();
     } else if (pendingContext && isOpen) {
       setInput(
-        `What's wrong with asset ${pendingContext.asset_id}? It's predicted as ${pendingContext.predicted_class} with ${pendingContext.rul_days} days RUL. What should I do?`
+        `Diagnose asset ${pendingContext.asset_id}. It's predicted as ${pendingContext.predicted_class} with ${pendingContext.rul_days} days RUL. Query telemetry data and explain which sensor readings indicate this failure mode. Do NOT recommend a technician - just explain the diagnosis.`
       );
       clearPending();
     }
@@ -114,17 +114,21 @@ export function ChatPanel() {
 
       const decoder = new TextDecoder();
       let currentEvent = "";
+      let buffer = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n").filter((l) => l.trim());
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.startsWith("event:")) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            const raw = line.slice(5).trim();
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith("event:")) {
+            currentEvent = trimmed.slice(6).trim();
+          } else if (trimmed.startsWith("data:")) {
+            const raw = trimmed.slice(5).trim();
             if (raw === "[DONE]") continue;
             try {
               const data = JSON.parse(raw);
@@ -139,6 +143,33 @@ export function ChatPanel() {
                   };
                   return updated;
                 });
+              }
+              if (currentEvent === "response.text" && data.text && !assistantText) {
+                assistantText = data.text;
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = {
+                    role: "assistant",
+                    content: assistantText,
+                    toolsUsed,
+                  };
+                  return updated;
+                });
+              }
+              if (currentEvent === "response" && data.content) {
+                const textContent = data.content.find((c: { type: string; text?: string }) => c.type === "text");
+                if (textContent?.text && !assistantText) {
+                  assistantText = textContent.text;
+                  setMessages((prev) => {
+                    const updated = [...prev];
+                    updated[updated.length - 1] = {
+                      role: "assistant",
+                      content: assistantText,
+                      toolsUsed,
+                    };
+                    return updated;
+                  });
+                }
               }
               if (currentEvent === "response.tool_use" && data.name) {
                 if (!toolsUsed.includes(data.name)) {

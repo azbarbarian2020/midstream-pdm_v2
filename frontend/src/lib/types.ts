@@ -70,10 +70,18 @@ export interface KPIs {
   avg_rul: number;
 }
 
+export interface CoMaintenance {
+  asset_id: number;
+  asset_type: string;
+  task: string;
+  estimated_hours: number;
+}
+
 export interface RouteStop {
   asset_id: number;
   asset_type: string;
   station: string;
+  station_id?: number;
   lat: number;
   lon: number;
   predicted_class: string;
@@ -86,6 +94,11 @@ export interface RouteStop {
   scheduled_date: string;
   stop_number: number;
   parts_needed: { name: string; category: string }[];
+  co_maintenance: CoMaintenance[];
+  co_maintenance_hours?: number;
+  stop_total_hours?: number;
+  cert_match?: boolean;
+  specialty_match?: boolean;
   reason: string;
 }
 
@@ -93,6 +106,7 @@ export interface RouteResult {
   tech_id: string;
   tech_name: string;
   tech_availability: string;
+  tech_certifications?: string[];
   home_lat: number;
   home_lon: number;
   primary_asset_id: number;
@@ -100,6 +114,10 @@ export interface RouteResult {
   total_stops: number;
   total_days: number;
   estimated_travel_miles: number;
+  co_maintenance_count?: number;
+  allow_overtime?: boolean;
+  max_hours_per_day?: number;
+  warnings?: string[];
 }
 
 export interface Technician {

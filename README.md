@@ -11,7 +11,7 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 | Natural language fleet analytics | Cortex Analyst + Semantic View |
 | Equipment manual and maintenance log search | Cortex Search |
 | AI maintenance assistant with tool orchestration | Cortex Agent (3 tools) |
-| Optimized technician route planning | Python Stored Procedure |
+| Optimized technician route planning with co-maintenance | Python Stored Procedure |
 | Time-travel simulation (rewind/fast-forward) | Parameterized queries |
 
 ## Architecture
@@ -53,27 +53,18 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 
 > **Note**: Seed data is included as static CSV exports in the `data/` directory. ML scoring runs inside Snowflake via `SCORE_FLEET_SP()` — no local ML or Python packages needed.
 
-## Service Account
+## Authentication
 
-User-level Programmatic Access Tokens (PATs) are being deprecated. The `setup.sh` script handles service account creation automatically:
+The setup script prompts for a **Programmatic Access Token (PAT)** for your user account. This is required for Cortex Agent REST API calls.
 
-1. **setup.sql** creates the `DEMO_PDM_ADMIN` role and all objects
-2. **setup.sh** then creates `PDM_SERVICE_USER` (TYPE=SERVICE) and grants the role
-3. The script pauses and prompts you to generate a PAT in Snowsight
+> **Important**: Cortex Agent REST APIs require PATs from regular user accounts (not TYPE=SERVICE users). The setup script uses your deploying user credentials.
 
-If you prefer manual setup, create the service user **after** running `setup.sql`:
-
-```sql
--- Run as ACCOUNTADMIN (after setup.sql has created DEMO_PDM_ADMIN)
-CREATE USER IF NOT EXISTS PDM_SERVICE_USER
-  TYPE = SERVICE
-  DEFAULT_ROLE = DEMO_PDM_ADMIN
-  DEFAULT_WAREHOUSE = PDM_DEMO_WH;
-
-GRANT ROLE DEMO_PDM_ADMIN TO USER PDM_SERVICE_USER;
-```
-
-Then generate a PAT in Snowsight: **Admin > Users & Roles > PDM_SERVICE_USER > Authentication > Programmatic Access Tokens > Generate** (select role DEMO_PDM_ADMIN).
+To generate a PAT before running setup:
+1. Open Snowsight as ACCOUNTADMIN
+2. Go to **Admin > Users & Roles > [your username]**
+3. Under **Authentication > Programmatic Access Tokens > Generate**
+4. Select role **ACCOUNTADMIN** (or DEMO_PDM_ADMIN if it exists)
+5. Copy the token — you'll paste it during setup
 
 ## Quick Start
 
@@ -194,8 +185,15 @@ The Cortex Agent orchestrates 3 tools:
 - **manual_search** (Cortex Search) — finds relevant Grundfos CRN bearing replacement procedures
 - **plan_route** — suggests bundling nearby at-risk assets into a service trip
 
-### Scenario 4: Route Planning (30 seconds)
+### Scenario 4: Route Planning with Co-Maintenance (1 minute)
 Go to Dispatch Service → select a technician → plan route for Asset 27. The app bundles nearby at-risk assets into an optimized multi-stop route with parts lists and travel estimates.
+
+**Co-Maintenance**: The route planner identifies additional maintenance tasks that can be performed opportunistically while visiting each stop. These recommendations are based on:
+- Upcoming scheduled maintenance (within 7 days)
+- Preventive maintenance intervals
+- Nearby assets with early warning indicators
+
+Ask the AI assistant: *"Explain this route plan"* — Cortex Agent will describe why each co-maintenance task was recommended based on sensor trends and maintenance history.
 
 ### Scenario 5: Time Travel (30 seconds)
 Use the time slider to rewind to March 6 — everything was healthy. Fast-forward day by day to watch assets degrade. This shows how early detection enables proactive maintenance.

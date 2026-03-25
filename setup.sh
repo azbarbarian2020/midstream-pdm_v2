@@ -237,48 +237,31 @@ create_network_access() {
 }
 
 # -------------------------------------------------------------------------
-# Step 6: Service user + Secrets (PAT + Key-pair)
+# Step 6: Secrets (PAT + Key-pair) - Uses deploying user directly
 # -------------------------------------------------------------------------
 create_secrets() {
-    echo -e "${BOLD}[6/11] Setting up service account and authentication...${NC}"
+    echo -e "${BOLD}[6/11] Setting up authentication...${NC}"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  SERVICE ACCOUNT SETUP${NC}"
+    echo -e "${CYAN}  AUTHENTICATION SETUP${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo "  User-level PATs are being deprecated. This script will create"
-    echo "  a dedicated TYPE=SERVICE user for the application."
+    echo -e "  ${YELLOW}IMPORTANT: Cortex Agent REST APIs require a PAT from a regular${NC}"
+    echo -e "  ${YELLOW}user account (not a TYPE=SERVICE user). We'll use your current${NC}"
+    echo -e "  ${YELLOW}user: ${SNOWFLAKE_USER}${NC}"
     echo ""
-
-    read -p "Create service user PDM_SERVICE_USER? (y/n) [y]: " CREATE_SVC
-    CREATE_SVC=${CREATE_SVC:-y}
-
-    if [[ "$CREATE_SVC" == "y" ]]; then
-        snow_sql -q "CREATE USER IF NOT EXISTS PDM_SERVICE_USER
-            TYPE = SERVICE
-            DEFAULT_ROLE = DEMO_PDM_ADMIN
-            DEFAULT_WAREHOUSE = PDM_DEMO_WH;"
-        SERVICE_USER="PDM_SERVICE_USER"
-        echo -e "  ${GREEN}✓ Service user PDM_SERVICE_USER created${NC}"
-    else
-        SERVICE_USER="$SNOWFLAKE_USER"
-        echo "  Using current user: $SERVICE_USER"
-    fi
-
-    snow_sql -q "GRANT ROLE DEMO_PDM_ADMIN TO USER ${SERVICE_USER};"
-    echo -e "  ${GREEN}✓ Role DEMO_PDM_ADMIN granted to ${SERVICE_USER}${NC}"
-
+    echo "  You need to generate a PAT (Programmatic Access Token) for this user."
     echo ""
-    echo -e "${YELLOW}  Now generate a PAT for ${SERVICE_USER}:${NC}"
+    echo -e "${YELLOW}  Steps to generate PAT for ${SNOWFLAKE_USER}:${NC}"
     echo "    1. Open Snowsight as ACCOUNTADMIN"
-    echo "    2. Go to Admin > Users & Roles > ${SERVICE_USER}"
+    echo "    2. Go to Admin > Users & Roles > ${SNOWFLAKE_USER}"
     echo "    3. Under Authentication > Programmatic Access Tokens > Generate"
-    echo "    4. Select role DEMO_PDM_ADMIN, copy the token"
+    echo "    4. Select role ACCOUNTADMIN (or DEMO_PDM_ADMIN), copy the token"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    read -sp "Enter PAT (Programmatic Access Token): " PAT_VALUE
+    read -sp "Enter PAT (Programmatic Access Token) for ${SNOWFLAKE_USER}: " PAT_VALUE
     echo ""
     if [ -z "$PAT_VALUE" ]; then echo -e "${RED}PAT is required.${NC}"; exit 1; fi
 
@@ -288,16 +271,14 @@ create_secrets() {
     echo -e "  ${GREEN}✓ PAT secret created${NC}"
 
     echo ""
-    echo "Generating RSA key pair for file operations..."
+    echo "Generating RSA key pair for SQL connections..."
     TEMP_DIR=$(mktemp -d)
     openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
     openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
     PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
 
-    read -p "Which user should get the RSA key? [${SERVICE_USER}]: " KEY_USER
-    KEY_USER=${KEY_USER:-$SERVICE_USER}
-    snow_sql -q "ALTER USER ${KEY_USER} SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
-    echo -e "  ${GREEN}✓ Public key assigned to ${KEY_USER}${NC}"
+    snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
+    echo -e "  ${GREEN}✓ Public key assigned to ${SNOWFLAKE_USER}${NC}"
 
     PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
     snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
@@ -366,7 +347,7 @@ for row in data:
 ")
     IMAGE_PATH="${REPO_URL}/pdm_frontend:v1"
 
-    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SERVICE_USER:-$SNOWFLAKE_USER}|g" \
+    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SNOWFLAKE_USER}|g" \
         "$SCRIPT_DIR/frontend/pdm_service.yaml.template" > /tmp/pdm_service.yaml
 
     snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
@@ -423,7 +404,7 @@ for row in data:
     echo -e "  Account:      ${ACCOUNT_LOCATOR}"
     echo -e "  Database:     PDM_DEMO"
     echo -e "  Service:      PDM_DEMO.APP.PDM_FRONTEND"
-    echo -e "  Service User: ${SERVICE_USER:-$SNOWFLAKE_USER}"
+    echo -e "  Service User: ${SNOWFLAKE_USER}"
     echo -e "  Pool:         PDM_DEMO_POOL"
     echo ""
     echo "  Demo date is frozen at 2026-03-13. Use the Time Travel"
@@ -445,7 +426,7 @@ main() {
     regrant_table_privileges # Step 3b: Re-grant after tables created/recreated
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
-    create_secrets           # Step 6: Service user (after role exists!) + PAT + key-pair
+    create_secrets           # Step 6: PAT + key-pair for deploying user
     create_network_access    # Step 7: Network rules + EAI
     build_and_push           # Step 8: Docker build + push
     deploy_service           # Step 9: SPCS service

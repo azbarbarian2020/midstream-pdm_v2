@@ -27,7 +27,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import clsx from "clsx";
-import type { RouteResult, RouteStop, Technician } from "@/lib/types";
+import type { RouteResult, RouteStop, CoMaintenance, Technician } from "@/lib/types";
 
 const DAY_COLORS = [
   { bg: "bg-blue-50 border-blue-200", text: "text-blue-700", badge: "bg-blue-100 text-blue-700", line: "#3b82f6" },
@@ -40,6 +40,7 @@ const DAY_COLORS = [
 function DispatchContent() {
   const queryClient = useQueryClient();
   const { asOfTimestamp, toDisplayDate, dataNow } = useTimeTravel();
+  const scheduleEnd = (() => { const d = new Date(dataNow); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10); })();
   const { open } = useChatContext();
   const searchParams = useSearchParams();
   const assetParam = searchParams.get("asset");
@@ -49,6 +50,7 @@ function DispatchContent() {
   const [defaultResolved, setDefaultResolved] = useState(!isNaN(initialAsset));
   const [horizonDays, setHorizonDays] = useState(3);
   const [maxStops, setMaxStops] = useState(8);
+  const [allowOvertime, setAllowOvertime] = useState(false);
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const [bundled, setBundled] = useState(false);
   const [showTechProfile, setShowTechProfile] = useState(false);
@@ -67,13 +69,13 @@ function DispatchContent() {
 
   const { data: techSchedules } = useQuery({
     queryKey: ["tech-schedules", techId],
-    queryFn: () => api.getTechSchedules(techId, dataNow.slice(0, 10), "2026-03-21"),
+    queryFn: () => api.getTechSchedules(techId, dataNow.slice(0, 10), scheduleEnd),
     enabled: !!techId,
   });
 
   const { data: allSchedules } = useQuery({
     queryKey: ["all-tech-schedules", bundled],
-    queryFn: () => api.getTechSchedules(undefined, dataNow.slice(0, 10), "2026-03-21"),
+    queryFn: () => api.getTechSchedules(undefined, dataNow.slice(0, 10), scheduleEnd),
   });
 
   const selectedTech = technicians?.find((t: Technician) => t.TECH_ID === techId);
@@ -113,6 +115,7 @@ function DispatchContent() {
         horizon_days: horizonDays,
         max_stops: maxStops,
         as_of_ts: asOfTimestamp || undefined,
+        allow_overtime: allowOvertime,
       }),
     onSuccess: (data) => {
       setRouteResult(data);
@@ -151,10 +154,20 @@ function DispatchContent() {
   const handleExplainRoute = () => {
     if (!routeResult) return;
     const stops = routeResult.route
-      .map((s: RouteStop, i: number) => `${i + 1}. Asset ${s.asset_id} (${s.asset_type}) - ${s.risk_level} - ${s.reason} [Day ${s.scheduled_day}]`)
+      .map((s: RouteStop, i: number) => {
+        let stopText = `${i + 1}. Asset ${s.asset_id} (${s.asset_type}) - ${s.risk_level} - ${s.reason} [Day ${s.scheduled_day}]`;
+        if (s.co_maintenance && s.co_maintenance.length > 0) {
+          const coMaintItems = s.co_maintenance
+            .map((cm: CoMaintenance) => `   • Co-maint: Asset ${cm.asset_id} (${cm.asset_type}) - ${cm.task} (${cm.estimated_hours}h)`)
+            .join("\n");
+          stopText += `\n${coMaintItems}`;
+        }
+        return stopText;
+      })
       .join("\n");
+    const coMaintTotal = routeResult.co_maintenance_count ?? 0;
     open(
-      `Explain the reasoning behind this maintenance route plan:\n${stops}\nTotal: ${routeResult.total_stops} stops, ${routeResult.estimated_travel_miles} miles, ${routeResult.total_days} day(s). Why this order? What co-replacements should I consider?`
+      `Explain the reasoning behind this maintenance route plan:\n${stops}\nTotal: ${routeResult.total_stops} stops, ${routeResult.estimated_travel_miles} miles, ${routeResult.total_days} day(s), ${coMaintTotal} co-maintenance tasks.\n\nWhy were these specific co-maintenance tasks recommended? What sensor trends or conditions justify each co-maintenance item?`
     );
   };
 
@@ -305,7 +318,7 @@ function DispatchContent() {
                           <div className="text-[10px] text-[var(--muted)] font-medium mb-1">Upcoming Schedule</div>
                           {techSchedules.map((s: any, i: number) => (
                             <div key={i} className="flex items-center gap-2 text-[10px] py-0.5">
-                              <span className="text-[var(--muted)] w-16">{s.SCHEDULE_DATE ? (() => { const [y,m,d] = String(s.SCHEDULE_DATE).slice(0,10).split("-"); return new Date(+y, +m-1, +d).toLocaleDateString("en-US", { month: "short", day: "numeric" }); })() : ""}</span>
+                              <span className="text-[var(--muted)] w-16">{s.SCHEDULE_DATE ? (() => { const shifted = toDisplayDate(String(s.SCHEDULE_DATE).slice(0,10)); const [y,m,d] = shifted.slice(0,10).split("-"); return new Date(+y, +m-1, +d).toLocaleDateString("en-US", { month: "short", day: "numeric" }); })() : ""}</span>
                               <span className={clsx(
                                 "px-1 rounded",
                                 s.BLOCK_TYPE === "ON_CALL" ? "bg-amber-50 text-amber-700" :
@@ -342,7 +355,7 @@ function DispatchContent() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-[var(--muted)] mb-1">Max Stops</label>
+                  <label className="block text-xs text-[var(--muted)] mb-1">Max Stops / Day</label>
                   <input
                     type="number"
                     value={maxStops}
@@ -351,6 +364,15 @@ function DispatchContent() {
                   />
                 </div>
               </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowOvertime}
+                  onChange={(e) => setAllowOvertime(e.target.checked)}
+                  className="rounded border-[var(--input-border)] text-indigo-600 focus:ring-indigo-500"
+                />
+                <span className="text-xs text-[var(--muted)]">Allow overtime (10h/day instead of 8h)</span>
+              </label>
               <button
                 onClick={() => planMutation.mutate()}
                 disabled={planMutation.isPending}
@@ -368,6 +390,8 @@ function DispatchContent() {
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs text-[var(--muted)]">
                     {routeResult.total_stops} stops · {routeResult.estimated_travel_miles} mi · {routeResult.total_days} day{routeResult.total_days > 1 ? "s" : ""}
+                    {(routeResult.co_maintenance_count ?? 0) > 0 && ` · ${routeResult.co_maintenance_count} co-maint`}
+                    {routeResult.allow_overtime && " · OT"}
                   </span>
                   <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
                     {selectedTech?.PHOTO_URL && (
@@ -380,8 +404,10 @@ function DispatchContent() {
                 {Object.entries(groupedByDay).map(([dayStr, stops]) => {
                   const day = Number(dayStr);
                   const dc = DAY_COLORS[(day - 1) % DAY_COLORS.length];
-                  const dayDate = stops[0]?.scheduled_date || "";
-                  const dayTotal = stops.reduce((sum, s) => sum + s.estimated_repair_hours + s.travel_hours, 0);
+                  const dayDateRaw = stops[0]?.scheduled_date || "";
+                  const dayDateShifted = dayDateRaw ? toDisplayDate(dayDateRaw) : "";
+                  const dayDate = dayDateShifted ? (() => { const [y,m,d] = dayDateShifted.slice(0,10).split("-"); return new Date(+y, +m-1, +d).toLocaleDateString("en-US", { month: "short", day: "numeric" }); })() : "";
+                  const dayTotal = stops.reduce((sum, s) => sum + (s.stop_total_hours ?? (s.estimated_repair_hours + s.travel_hours)), 0);
 
                   return (
                     <div key={day} className="mb-3">
@@ -420,13 +446,22 @@ function DispatchContent() {
                               </span>
                               <span className="font-medium text-sm text-[var(--foreground)]">Asset {stop.asset_id}</span>
                               <span className="text-xs text-[var(--muted)]">{stop.asset_type}</span>
+                              {stop.rul_days != null && (
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--badge-bg)] text-[var(--muted)]">
+                                  RUL: {stop.rul_days.toFixed(1)}d
+                                </span>
+                              )}
                               {stop.risk_level === "CRITICAL" && <AlertOctagon size={12} className="text-red-500" />}
                               {stop.risk_level === "WARNING" && <AlertTriangle size={12} className="text-amber-500" />}
                             </div>
                             <div className="text-xs text-[var(--muted)]">
                               <MapPin size={10} className="inline mr-1" />{stop.station}
                             </div>
-                            <div className="text-xs text-[var(--muted)] mt-1">{stop.reason}</div>
+                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              <span className="text-xs text-[var(--muted)]">{stop.reason}</span>
+                              {stop.cert_match && <span className="text-[9px] px-1 py-0.5 bg-emerald-50 text-emerald-700 rounded">certified</span>}
+                              {stop.specialty_match && <span className="text-[9px] px-1 py-0.5 bg-indigo-50 text-indigo-700 rounded">specialist</span>}
+                            </div>
                             <div className="flex items-center gap-3 mt-2 text-[10px] text-[var(--muted)]">
                               <span className="flex items-center gap-1">
                                 <Wrench size={10} />
@@ -451,6 +486,17 @@ function DispatchContent() {
                                   <span key={j} className="text-[10px] px-1.5 py-0.5 bg-[var(--badge-bg)] rounded text-[var(--muted)]">
                                     {p.name}
                                   </span>
+                                ))}
+                              </div>
+                            )}
+                            {stop.co_maintenance && stop.co_maintenance.length > 0 && (
+                              <div className="mt-2 pt-2 border-t border-dashed border-[var(--border)]">
+                                <div className="text-[10px] font-medium text-emerald-700 mb-1">While on-site — co-maintenance:</div>
+                                {stop.co_maintenance.map((cm: CoMaintenance, j: number) => (
+                                  <div key={j} className="flex items-center gap-2 text-[10px] text-[var(--muted)] py-0.5">
+                                    <span className="w-4 h-4 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-[8px] font-bold">+</span>
+                                    <span>Asset {cm.asset_id} ({cm.asset_type}) — {cm.task} ({cm.estimated_hours}h)</span>
+                                  </div>
                                 ))}
                               </div>
                             )}
