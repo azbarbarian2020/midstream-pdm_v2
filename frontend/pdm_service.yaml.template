@@ -19,7 +19,7 @@ spec:
           secretKeyRef: secret_string
           envVarName: SNOWFLAKE_PAT
       readinessProbe:
-        port: 3000
+        port: 8080
         path: /api/health
       resources:
         requests:
@@ -30,7 +30,7 @@ spec:
           cpu: 1
   endpoints:
     - name: ui
-      port: 3000
+      port: 8080
       public: true
   networkPolicyConfig:
     allowInternetEgress: true
