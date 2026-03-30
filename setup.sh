@@ -147,15 +147,15 @@ seed_data() {
 }
 
 # -------------------------------------------------------------------------
-# Step 3: Create scoring SP (reference only - predictions pre-loaded)
+# Step 3: Note about ML pipelines (predictions are pre-loaded)
 # -------------------------------------------------------------------------
-create_scoring_sp() {
-    echo -e "${BOLD}[3/10] Creating scoring stored procedure (reference only)...${NC}"
+note_ml_pipelines() {
+    echo -e "${BOLD}[3/10] ML Pipeline Notes...${NC}"
     echo "  NOTE: Predictions are pre-loaded from static export."
-    echo "        The scoring SP is created for reference but NOT called."
-    echo "        To regenerate predictions, run: CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
-    snow_sql -f "$SCRIPT_DIR/snowflake/score_fleet_sp.sql"
-    echo -e "${GREEN}✓ Scoring SP created (predictions pre-loaded)${NC}\n"
+    echo "        To retrain or re-infer, use the notebooks in /notebooks:"
+    echo "          - pump_training_pipeline.ipynb (training)"
+    echo "          - pump_inference_pipeline.ipynb (inference)"
+    echo -e "${GREEN}✓ Predictions pre-loaded (notebooks available for retraining)${NC}\n"
 }
 
 # -------------------------------------------------------------------------
@@ -510,7 +510,7 @@ main() {
     setup_connection
     create_infrastructure    # Step 1: DDL
     seed_data                # Step 2: Seed data (includes PREDICTIONS)
-    create_scoring_sp        # Step 3: Create SP (don't run it)
+    note_ml_pipelines        # Step 3: Note about notebooks
     regrant_table_privileges # Step 3b: Re-grant
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
