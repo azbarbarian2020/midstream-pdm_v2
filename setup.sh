@@ -86,19 +86,19 @@ snow_sql() {
 # Step 1: Infrastructure (DDL)
 # -------------------------------------------------------------------------
 create_infrastructure() {
-    echo -e "${BOLD}[1/11] Creating database, schemas, tables, and stages...${NC}"
+    echo -e "${BOLD}[1/10] Creating database, schemas, tables, and stages...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/setup.sql"
     echo -e "${GREEN}✓ Infrastructure created${NC}\n"
 }
 
 # -------------------------------------------------------------------------
-# Step 2: Seed data
+# Step 2: Seed data (from pre-exported CSVs)
 # -------------------------------------------------------------------------
 seed_data() {
-    echo -e "${BOLD}[2/11] Loading seed data from static exports...${NC}"
+    echo -e "${BOLD}[2/10] Loading seed data from static exports...${NC}"
     echo "  Uploading CSV files to DATA_STAGE..."
 
-    snow stage copy "$SCRIPT_DIR/data/" @PDM_DEMO.APP.DATA_STAGE/seed/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
+    snow stage copy "$SCRIPT_DIR/data/" @PDM_DEMO.APP.DATA_STAGE/seed/ --recursive --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
 
     echo "  Loading tables from CSV..."
     local CSV_FORMAT="TYPE = CSV COMPRESSION = GZIP FIELD_OPTIONALLY_ENCLOSED_BY = '\"' SKIP_HEADER = 1 FIELD_DELIMITER = ',' NULL_IF = ('')"
@@ -118,18 +118,27 @@ seed_data() {
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.MAINTENANCE_LOGS;"
     snow_sql -q "COPY INTO PDM_DEMO.RAW.MAINTENANCE_LOGS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_maintenance_logs.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
-    echo "  Loading telemetry (~930K rows)..."
+    echo "  Loading telemetry (~1M rows, this may take a minute)..."
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.TELEMETRY;"
-    snow_sql -q "COPY INTO PDM_DEMO.RAW.TELEMETRY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_telemetry.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.TELEMETRY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_telemetry/ FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
+    echo "  Loading analytics tables (feature store + predictions)..."
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.ANALYTICS.FEATURE_STORE;"
     snow_sql -q "COPY INTO PDM_DEMO.ANALYTICS.FEATURE_STORE FROM @PDM_DEMO.APP.DATA_STAGE/seed/analytics_feature_store.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.ANALYTICS.PREDICTIONS;"
+    snow_sql -q "COPY INTO PDM_DEMO.ANALYTICS.PREDICTIONS FROM @PDM_DEMO.APP.DATA_STAGE/seed/analytics_predictions.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    echo "  Loading ML model metadata..."
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.ML.MODEL_METADATA;"
+    snow_sql -q "COPY INTO PDM_DEMO.ML.MODEL_METADATA FROM @PDM_DEMO.APP.DATA_STAGE/seed/ml_model_metadata.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+
+    echo "  Loading app tables..."
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.MANUALS;"
     snow_sql -q "COPY INTO PDM_DEMO.APP.MANUALS (DOC_ID, ASSET_TYPE, SECTION_TYPE, TITLE, CONTENT, SOURCE_URL, MODEL_NAME) FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_manuals.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.WORK_ORDERS;"
-    snow_sql -q "COPY INTO PDM_DEMO.APP.WORK_ORDERS FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_work_orders.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+    snow_sql -q "COPY INTO PDM_DEMO.APP.WORK_ORDERS FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_work_orders.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'SKIP_FILE';"
 
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.APP.TECH_SCHEDULES;"
     snow_sql -q "COPY INTO PDM_DEMO.APP.TECH_SCHEDULES FROM @PDM_DEMO.APP.DATA_STAGE/seed/app_tech_schedules.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
@@ -138,21 +147,22 @@ seed_data() {
 }
 
 # -------------------------------------------------------------------------
-# Step 3: Score fleet (create SP + run in Snowflake)
+# Step 3: Create scoring SP (reference only - predictions pre-loaded)
 # -------------------------------------------------------------------------
-score_fleet() {
-    echo -e "${BOLD}[3/11] Creating scoring procedure and generating predictions...${NC}"
-    echo "  Training ML models and scoring fleet (runs in Snowflake, ~2 min)..."
+create_scoring_sp() {
+    echo -e "${BOLD}[3/10] Creating scoring stored procedure (reference only)...${NC}"
+    echo "  NOTE: Predictions are pre-loaded from static export."
+    echo "        The scoring SP is created for reference but NOT called."
+    echo "        To regenerate predictions, run: CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
     snow_sql -f "$SCRIPT_DIR/snowflake/score_fleet_sp.sql"
-    snow_sql -q "CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
-    echo -e "${GREEN}✓ Predictions generated${NC}\n"
+    echo -e "${GREEN}✓ Scoring SP created (predictions pre-loaded)${NC}\n"
 }
 
 # -------------------------------------------------------------------------
-# Step 3b: Re-grant privileges on tables created by seed_data / score_fleet
+# Step 3b: Re-grant privileges
 # -------------------------------------------------------------------------
 regrant_table_privileges() {
-    echo -e "${BOLD}[3b/11] Re-granting table privileges to DEMO_PDM_ADMIN...${NC}"
+    echo -e "${BOLD}[3b/10] Re-granting table privileges to DEMO_PDM_ADMIN...${NC}"
     snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.RAW TO ROLE DEMO_PDM_ADMIN;"
     snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ANALYTICS TO ROLE DEMO_PDM_ADMIN;"
     snow_sql -q "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA PDM_DEMO.ML TO ROLE DEMO_PDM_ADMIN;"
@@ -165,7 +175,7 @@ regrant_table_privileges() {
 # Step 4: Cortex services
 # -------------------------------------------------------------------------
 create_cortex_services() {
-    echo -e "${BOLD}[4/11] Creating Cortex Search service and Semantic View...${NC}"
+    echo -e "${BOLD}[4/10] Creating Cortex Search service and Semantic View...${NC}"
     snow stage copy "$SCRIPT_DIR/snowflake/semantic_model.yaml" @PDM_DEMO.APP.MODELS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_services.sql"
 
@@ -185,7 +195,7 @@ create_cortex_services() {
 # Step 5: Route planner + Agent
 # -------------------------------------------------------------------------
 create_agent() {
-    echo -e "${BOLD}[5/11] Creating stored procedures and Cortex Agent...${NC}"
+    echo -e "${BOLD}[5/10] Creating stored procedures and Cortex Agent...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/route_planner_sp.sql"
     snow_sql -f "$SCRIPT_DIR/snowflake/reset_demo.sql"
     snow_sql -f "$SCRIPT_DIR/snowflake/cortex_agent.sql"
@@ -193,55 +203,44 @@ create_agent() {
 }
 
 # -------------------------------------------------------------------------
-# Step 6: Network rules + External access (needs host placeholder filled)
+# Step 6: Secrets (PAT + Key-pair) with SAFE KEY MANAGEMENT
 # -------------------------------------------------------------------------
-create_network_access() {
-    echo -e "${BOLD}[7/11] Creating network rules and external access integrations...${NC}"
+generate_new_key() {
+    echo ""
+    echo "  Generating RSA key pair..."
+    TEMP_DIR=$(mktemp -d)
+    openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
+    openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
+    PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
 
-    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.SNOWFLAKE_API_RULE
-        TYPE = HOST_PORT MODE = EGRESS
-        VALUE_LIST = ('${SNOWFLAKE_HOST}:443');"
+    snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
+    echo -e "  ${GREEN}✓ Public key assigned to ${SNOWFLAKE_USER}${NC}"
 
-    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.OSM_TILES_RULE
-        TYPE = HOST_PORT MODE = EGRESS
-        VALUE_LIST = ('tile.openstreetmap.org:443');"
-
-    S3_HOST=$(snow_sql -q "SELECT PARSE_JSON(VALUE)['host']::VARCHAR AS host
-        FROM TABLE(FLATTEN(INPUT => PARSE_JSON(SYSTEM\$ALLOWLIST())))
-        WHERE PARSE_JSON(VALUE)['type']::VARCHAR = 'STAGE'
-          AND PARSE_JSON(VALUE)['host']::VARCHAR LIKE '%s3.%amazonaws.com'
-        LIMIT 1;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['HOST'])" 2>/dev/null || echo "")
-
-    if [ -n "$S3_HOST" ]; then
-        echo "  S3 stage host: $S3_HOST"
-        snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE
-            TYPE = HOST_PORT MODE = EGRESS
-            VALUE_LIST = ('${S3_HOST}:443');"
-
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
-            ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE)
-            ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
-            ENABLED = TRUE;"
-    else
-        echo -e "  ${YELLOW}Could not detect S3 stage host; creating EAI without S3 rule${NC}"
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
-            ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE)
-            ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
-            ENABLED = TRUE;"
-    fi
-
-    snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS
-        ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE)
-        ENABLED = TRUE;"
-
-    echo -e "${GREEN}✓ Network access configured${NC}\n"
+    PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
+    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+    echo -e "  ${GREEN}✓ Private key secret created${NC}"
+    rm -rf "$TEMP_DIR"
 }
 
-# -------------------------------------------------------------------------
-# Step 6: Secrets (PAT + Key-pair) - Uses deploying user directly
-# -------------------------------------------------------------------------
+generate_key_slot_2() {
+    echo ""
+    echo "  Generating RSA key pair for RSA_PUBLIC_KEY_2..."
+    TEMP_DIR=$(mktemp -d)
+    openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
+    openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
+    PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
+
+    snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET RSA_PUBLIC_KEY_2='${PUBLIC_KEY}';"
+    echo -e "  ${GREEN}✓ Public key assigned to RSA_PUBLIC_KEY_2${NC}"
+
+    PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
+    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+    echo -e "  ${GREEN}✓ Private key secret created${NC}"
+    rm -rf "$TEMP_DIR"
+}
+
 create_secrets() {
-    echo -e "${BOLD}[6/11] Setting up authentication...${NC}"
+    echo -e "${BOLD}[6/10] Setting up authentication...${NC}"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  AUTHENTICATION SETUP${NC}"
@@ -264,30 +263,93 @@ create_secrets() {
 
     read -sp "Enter PAT (Programmatic Access Token) for ${SNOWFLAKE_USER}: " PAT_VALUE
     echo ""
-    if [ -z "$PAT_VALUE" ]; then echo -e "${RED}PAT is required.${NC}"; exit 1; fi
+    if [ -z "$PAT_VALUE" ]; then
+        echo -e "${RED}PAT is required.${NC}"
+        exit 1
+    fi
 
-    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
-        TYPE = GENERIC_STRING
-        SECRET_STRING = '${PAT_VALUE}';"
+    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PAT_VALUE}';"
     echo -e "  ${GREEN}✓ PAT secret created${NC}"
 
+    # SAFE KEY MANAGEMENT: Check for existing RSA key
     echo ""
-    echo "Generating RSA key pair for SQL connections..."
-    TEMP_DIR=$(mktemp -d)
-    openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
-    openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
-    PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
+    echo "  Checking for existing RSA key..."
+    EXISTING_KEY=$(snow_sql -q "DESCRIBE USER ${SNOWFLAKE_USER};" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for row in data:
+        if row.get('property') == 'RSA_PUBLIC_KEY':
+            val = row.get('value', '')
+            if val and val != 'null' and len(val) > 10:
+                print('EXISTS')
+                break
+except: pass
+" 2>/dev/null || echo "")
 
-    snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
-    echo -e "  ${GREEN}✓ Public key assigned to ${SNOWFLAKE_USER}${NC}"
+    if [ "$EXISTING_KEY" = "EXISTS" ]; then
+        echo ""
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}  ⚠️  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "  Another SPCS application may be using this key."
+        echo "  Overwriting it will break that application's authentication."
+        echo ""
+        echo "  Options:"
+        echo "    1) Reuse existing key (requires private key file or existing secret)"
+        echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
+        echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
+        echo ""
+        read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
+        KEY_CHOICE=${KEY_CHOICE:-2}
 
-    PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
-    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
-        TYPE = GENERIC_STRING
-        SECRET_STRING = '${PRIVATE_KEY}';"
-    echo -e "  ${GREEN}✓ Private key secret created${NC}"
+        case $KEY_CHOICE in
+            1)
+                echo ""
+                echo "  Checking for existing private key secret..."
+                SECRET_EXISTS=$(snow_sql -q "SHOW SECRETS LIKE 'SNOWFLAKE_PRIVATE_KEY_SECRET' IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d else 'no')" 2>/dev/null || echo "no")
 
-    rm -rf "$TEMP_DIR"
+                if [ "$SECRET_EXISTS" = "yes" ]; then
+                    echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
+                else
+                    echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
+                    echo "  You need to provide the private key that matches the existing public key."
+                    echo ""
+                    read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
+                    if [ -f "$PRIVATE_KEY_PATH" ]; then
+                        PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
+                        snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+                        echo -e "  ${GREEN}✓ Private key secret created${NC}"
+                    else
+                        echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
+                        echo -e "  ${RED}Cannot continue without private key.${NC}"
+                        exit 1
+                    fi
+                fi
+                ;;
+            2)
+                generate_key_slot_2
+                ;;
+            3)
+                echo ""
+                echo -e "  ${RED}WARNING: This will invalidate any other SPCS apps using this user!${NC}"
+                read -p "  Are you sure? (yes/no): " CONFIRM
+                if [ "$CONFIRM" != "yes" ]; then
+                    echo "  Aborted."
+                    exit 1
+                fi
+                generate_new_key
+                ;;
+            *)
+                echo -e "  ${YELLOW}Invalid choice, using RSA_PUBLIC_KEY_2 (default)${NC}"
+                generate_key_slot_2
+                ;;
+        esac
+    else
+        # No existing key - safe to generate
+        generate_new_key
+    fi
 
     snow_sql -q "GRANT READ ON SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET TO ROLE DEMO_PDM_ADMIN;"
     snow_sql -q "GRANT READ ON SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TO ROLE DEMO_PDM_ADMIN;"
@@ -296,10 +358,37 @@ create_secrets() {
 }
 
 # -------------------------------------------------------------------------
+# Step 7: Network rules + External access
+# -------------------------------------------------------------------------
+create_network_access() {
+    echo -e "${BOLD}[7/10] Creating network rules and external access integrations...${NC}"
+
+    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.SNOWFLAKE_API_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('${SNOWFLAKE_HOST}:443');"
+
+    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.OSM_TILES_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('tile.openstreetmap.org:443');"
+
+    S3_HOST=$(snow_sql -q "SELECT PARSE_JSON(VALUE)['host']::VARCHAR AS host FROM TABLE(FLATTEN(INPUT => PARSE_JSON(SYSTEM\$ALLOWLIST()))) WHERE PARSE_JSON(VALUE)['type']::VARCHAR = 'STAGE' AND PARSE_JSON(VALUE)['host']::VARCHAR LIKE '%s3.%amazonaws.com' LIMIT 1;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['HOST'])" 2>/dev/null || echo "")
+
+    if [ -n "$S3_HOST" ]; then
+        echo "  S3 stage host: $S3_HOST"
+        snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('${S3_HOST}:443');"
+
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET) ENABLED = TRUE;"
+    else
+        echo -e "  ${YELLOW}Could not detect S3 stage host; creating EAI without S3 rule${NC}"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET) ENABLED = TRUE;"
+    fi
+
+    snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE) ENABLED = TRUE;"
+
+    echo -e "${GREEN}✓ Network access configured${NC}\n"
+}
+
+# -------------------------------------------------------------------------
 # Step 8: Build and push Docker image
 # -------------------------------------------------------------------------
 build_and_push() {
-    echo -e "${BOLD}[8/11] Building and pushing Docker image...${NC}"
+    echo -e "${BOLD}[8/10] Building and pushing Docker image...${NC}"
 
     snow spcs image-registry login --connection "$CONNECTION_NAME"
 
@@ -330,13 +419,9 @@ for row in data:
 # Step 9: Create compute pool + service
 # -------------------------------------------------------------------------
 deploy_service() {
-    echo -e "${BOLD}[9/11] Deploying SPCS service...${NC}"
+    echo -e "${BOLD}[9/10] Deploying SPCS service...${NC}"
 
-    snow_sql -q "CREATE COMPUTE POOL IF NOT EXISTS PDM_DEMO_POOL
-        MIN_NODES = 1 MAX_NODES = 1
-        INSTANCE_FAMILY = CPU_X64_XS
-        AUTO_RESUME = TRUE
-        AUTO_SUSPEND_SECS = 3600;"
+    snow_sql -q "CREATE COMPUTE POOL IF NOT EXISTS PDM_DEMO_POOL MIN_NODES = 1 MAX_NODES = 1 INSTANCE_FAMILY = CPU_X64_XS AUTO_RESUME = TRUE AUTO_SUSPEND_SECS = 3600;"
 
     REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "
 import sys, json
@@ -353,13 +438,7 @@ for row in data:
 
     snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
 
-    snow_sql -q "CREATE SERVICE IF NOT EXISTS PDM_DEMO.APP.PDM_FRONTEND
-        IN COMPUTE POOL PDM_DEMO_POOL
-        FROM @PDM_DEMO.APP.SPECS
-        SPECIFICATION_FILE = 'pdm_service.yaml'
-        EXTERNAL_ACCESS_INTEGRATIONS = (PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS)
-        MIN_INSTANCES = 1
-        MAX_INSTANCES = 1;"
+    snow_sql -q "CREATE SERVICE IF NOT EXISTS PDM_DEMO.APP.PDM_FRONTEND IN COMPUTE POOL PDM_DEMO_POOL FROM @PDM_DEMO.APP.SPECS SPECIFICATION_FILE = 'pdm_service.yaml' EXTERNAL_ACCESS_INTEGRATIONS = (PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS) MIN_INSTANCES = 1 MAX_INSTANCES = 1;"
 
     echo "  Waiting for service to start..."
     for i in $(seq 1 40); do
@@ -385,7 +464,7 @@ except:
 # Step 10: Show results
 # -------------------------------------------------------------------------
 show_results() {
-    echo -e "${BOLD}[10/11] Getting service endpoint...${NC}"
+    echo -e "${BOLD}[10/10] Getting service endpoint...${NC}"
     ENDPOINT=$(snow_sql -q "SHOW ENDPOINTS IN SERVICE PDM_DEMO.APP.PDM_FRONTEND;" --format json 2>/dev/null | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -411,6 +490,10 @@ for row in data:
     echo "  Demo date is frozen at 2026-03-13. Use the Time Travel"
     echo "  slider in the app to simulate past and future states."
     echo ""
+    echo -e "${YELLOW}  NOTE: Predictions are pre-loaded from static export.${NC}"
+    echo -e "${YELLOW}  To regenerate (produces same results due to seeding):${NC}"
+    echo -e "${YELLOW}    CALL PDM_DEMO.ML.SCORE_FLEET_SP();${NC}"
+    echo ""
     echo "  To tear down: ./teardown.sh"
     echo -e "${GREEN}=================================================================${NC}"
 }
@@ -421,13 +504,13 @@ for row in data:
 main() {
     check_prereqs
     setup_connection
-    create_infrastructure    # Step 1: DDL (creates DEMO_PDM_ADMIN role)
-    seed_data                # Step 2: Seed data
-    score_fleet              # Step 3: Create SP + generate predictions
-    regrant_table_privileges # Step 3b: Re-grant after tables created/recreated
+    create_infrastructure    # Step 1: DDL
+    seed_data                # Step 2: Seed data (includes PREDICTIONS)
+    create_scoring_sp        # Step 3: Create SP (don't run it)
+    regrant_table_privileges # Step 3b: Re-grant
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
-    create_secrets           # Step 6: PAT + key-pair for deploying user
+    create_secrets           # Step 6: PAT + key-pair (SAFE key management)
     create_network_access    # Step 7: Network rules + EAI
     build_and_push           # Step 8: Docker build + push
     deploy_service           # Step 9: SPCS service

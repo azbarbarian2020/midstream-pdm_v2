@@ -4,8 +4,8 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 
 ## What This Demo Shows
 
-| Capability | Snowflake Feature |
-|---|---|
+| Feature | Technology |
+|---------|------------|
 | Fleet health dashboard with interactive map | SPCS + Next.js |
 | ML-predicted failure modes and remaining useful life (RUL) | ML Model Registry + XGBoost |
 | Natural language fleet analytics | Cortex Analyst + Semantic View |
@@ -40,31 +40,18 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**50 assets** (pumps + compressors) across **10 stations**, 8 equipment models, 8 technicians, 6 failure modes, ~930K telemetry rows.
+50 assets (pumps + compressors) across 10 stations, 8 equipment models, 8 technicians, 6 failure modes, ~1M telemetry rows.
 
 ## Prerequisites
 
-- **Snowflake account on AWS** (Cortex AI features require AWS)
-- **ACCOUNTADMIN** role (or equivalent privileges)
-- **Docker Desktop** (for building the container image)
-- **Snowflake CLI** (`pip install snowflake-cli`)
-- **Python 3.11+** (for JSON parsing in setup script)
-- **openssl** (for RSA key generation)
+- Snowflake account on **AWS** (Cortex AI features require AWS)
+- ACCOUNTADMIN role (or equivalent privileges)
+- Docker Desktop (for building the container image)
+- Snowflake CLI (`pip install snowflake-cli`)
+- Python 3.11+ (for JSON parsing in setup script)
+- openssl (for RSA key generation)
 
-> **Note**: Seed data is included as static CSV exports in the `data/` directory. ML scoring runs inside Snowflake via `SCORE_FLEET_SP()` — no local ML or Python packages needed.
-
-## Authentication
-
-The setup script prompts for a **Programmatic Access Token (PAT)** for your user account. This is required for Cortex Agent REST API calls.
-
-> **Important**: Cortex Agent REST APIs require PATs from regular user accounts (not TYPE=SERVICE users). The setup script uses your deploying user credentials.
-
-To generate a PAT before running setup:
-1. Open Snowsight as ACCOUNTADMIN
-2. Go to **Admin > Users & Roles > [your username]**
-3. Under **Authentication > Programmatic Access Tokens > Generate**
-4. Select role **ACCOUNTADMIN** (or DEMO_PDM_ADMIN if it exists)
-5. Copy the token — you'll paste it during setup
+> **Note**: Seed data is included as static CSV exports in the `data/` directory. ML predictions are pre-computed — no local ML or Python packages needed.
 
 ## Quick Start
 
@@ -74,111 +61,74 @@ cd midstream-pdm
 ./setup.sh
 ```
 
+**Estimated time**: 15-25 minutes (mostly Docker build + data loading)
+
 The setup script will:
+
 1. Prompt for your Snowflake CLI connection name
 2. Auto-detect your account, host, and registry
 3. Create all database objects (tables, views, stages, role)
-4. Load seed data from static CSV exports (~930K telemetry rows)
-5. Train ML models and score the fleet (runs in Snowflake via stored procedure)
+4. Load seed data from static CSV exports (~1M telemetry rows)
+5. Load pre-computed ML predictions (deterministic, seeded)
 6. Create Cortex Search, Semantic View, and Agent
-7. Create service user, prompt for PAT, and generate RSA key pair
+7. Prompt for PAT and set up RSA key pair (with safe key management)
 8. Build and push the Docker image
 9. Deploy the SPCS service
 10. Print the application URL
 
-**Estimated time**: 15-25 minutes (mostly Docker build + data generation)
+### Safe Key Management
 
-## Manual Setup
+If you already have an RSA key configured for another SPCS app (like Digital_Twin_Truck_Configurator), the setup script will detect this and offer options:
 
-If you prefer to run steps individually:
+1. **Reuse existing key** — Requires the matching private key
+2. **Use RSA_PUBLIC_KEY_2** — Both apps work simultaneously (recommended)
+3. **Generate new key** — Warning: breaks other SPCS apps
 
-```bash
-# 1. Configure your Snowflake CLI connection
-snow connection add
+## Documentation
 
-# 2. Create infrastructure
-snow sql --connection <conn> -f snowflake/setup.sql
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Quick start guide and overview |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed technical architecture |
+| [docs/how_it_works.md](docs/how_it_works.md) | **Deep dive for demos:** Data structure, ML pipeline, Agent architecture |
+| [docs/failure_signatures.md](docs/failure_signatures.md) | Failure mode sensor signatures |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and solutions |
 
-# 3. Seed data (upload CSVs from data/ to stage, then COPY INTO tables)
-snow stage copy data/ @PDM_DEMO.APP.DATA_STAGE/seed/ --overwrite --database PDM_DEMO --schema APP --connection <conn>
-# Then run COPY INTO for each table (see setup.sh seed_data function)
+## For Demonstrators
 
-# 4. Generate predictions (runs in Snowflake, no local ML needed)
-snow sql --connection <conn> -f snowflake/score_fleet_sp.sql
-snow sql --connection <conn> -q "CALL PDM_DEMO.ML.SCORE_FLEET_SP();"
+### Data Consistency
 
-# 5. Upload semantic model and create Cortex services
-snow stage copy snowflake/semantic_model.yaml @PDM_DEMO.APP.MODELS/ \
-  --overwrite --database PDM_DEMO --schema APP --connection <conn>
-snow sql --connection <conn> -f snowflake/cortex_services.sql
+All data is loaded from pre-exported CSVs for consistent demo behavior across deployments. Asset 27 will always show bearing wear with the same RUL values, and the route planner will always bundle the same assets.
 
-# 6. Create route planner and agent
-snow sql --connection <conn> -f snowflake/route_planner_sp.sql
-snow sql --connection <conn> -f snowflake/cortex_agent.sql
+### Running ML Notebooks (Optional)
 
-# 7. Create secrets (PAT + RSA key pair)
-snow sql --connection <conn> -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
-  TYPE = GENERIC_STRING SECRET_STRING = '<your-pat>';"
+The notebooks use fixed random seeds (`random_state=42`, `seed=123`) for reproducibility. You CAN run them to:
 
-# Generate key pair
-openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out /tmp/key.p8
-openssl rsa -in /tmp/key.p8 -pubout -out /tmp/key.pub
-PUBLIC_KEY=$(grep -v 'BEGIN\|END' /tmp/key.pub | tr -d '\n')
-snow sql --connection <conn> -q "ALTER USER <user> SET RSA_PUBLIC_KEY='$PUBLIC_KEY';"
-PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' /tmp/key.p8)
-snow sql --connection <conn> -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
-  TYPE = GENERIC_STRING SECRET_STRING = '$PRIVATE_KEY';"
+- Register models in the ML schema (visible in Snowsight)
+- Demonstrate the training process to your audience
 
-# 8. Create network rules and external access
-snow sql --connection <conn> -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.SNOWFLAKE_API_RULE
-  TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('<your-host>:443');"
-snow sql --connection <conn> -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.OSM_TILES_RULE
-  TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('tile.openstreetmap.org:443');"
-snow sql --connection <conn> -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE
-  TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('*.s3.*.amazonaws.com:443');"
-snow sql --connection <conn> -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS
-  ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE)
-  ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET)
-  ENABLED = TRUE;"
-snow sql --connection <conn> -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS
-  ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE)
-  ENABLED = TRUE;"
+**Safe to run (register models, don't overwrite predictions):**
+- `notebooks/pump_training_pipeline.ipynb` — Generates training data + trains models
+- `notebooks/pump_classifier_training.ipynb` — Classifier training
+- `notebooks/pump_rul_training.ipynb` — RUL regressor training
+- `notebooks/ml_training.ipynb` — Combined training
 
-# 9. Build and push Docker image
-snow spcs image-registry login --connection <conn>
-# Get your registry URL from: SHOW IMAGE REPOSITORIES IN SCHEMA PDM_DEMO.APP;
-docker buildx build --platform linux/amd64 -t <registry>/pdm_demo/app/pdm_repo/pdm_frontend:v1 -f frontend/Dockerfile frontend --load
-docker push <registry>/pdm_demo/app/pdm_repo/pdm_frontend:v1
+**Regenerates predictions (use with caution):**
+- `notebooks/pump_inference_pipeline.ipynb` — Regenerates demo data
+- `CALL PDM_DEMO.ML.SCORE_FLEET_SP();` — Rescores fleet
 
-# 10. Generate service YAML from template
-sed "s|__IMAGE_PATH__|<image-path>|g; s|__SNOWFLAKE_HOST__|<host>|g; s|__SNOWFLAKE_ACCOUNT__|<account>|g; s|__SNOWFLAKE_USER__|<user>|g" \
-  frontend/pdm_service.yaml.template > /tmp/pdm_service.yaml
-snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection <conn>
-
-# 11. Create compute pool and service
-snow sql --connection <conn> -q "CREATE COMPUTE POOL IF NOT EXISTS PDM_DEMO_POOL
-  MIN_NODES=1 MAX_NODES=1 INSTANCE_FAMILY=CPU_X64_XS AUTO_RESUME=TRUE AUTO_SUSPEND_SECS=3600;"
-snow sql --connection <conn> -q "CREATE SERVICE IF NOT EXISTS PDM_DEMO.APP.PDM_FRONTEND
-  IN COMPUTE POOL PDM_DEMO_POOL
-  FROM @PDM_DEMO.APP.SPECS SPECIFICATION_FILE='pdm_service.yaml'
-  EXTERNAL_ACCESS_INTEGRATIONS=(PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS)
-  MIN_INSTANCES=1 MAX_INSTANCES=1;"
-
-# 12. Check status and get URL
-snow sql --connection <conn> -q "SELECT SYSTEM\$GET_SERVICE_STATUS('PDM_DEMO.APP.PDM_FRONTEND');"
-snow sql --connection <conn> -q "SHOW ENDPOINTS IN SERVICE PDM_DEMO.APP.PDM_FRONTEND;"
-```
+Running the inference pipeline or scoring SP will produce identical results due to seeding, but is unnecessary since predictions are pre-loaded.
 
 ## Demo Walkthrough
 
 ### Scenario 1: Fleet Overview (30 seconds)
-Open the app — you see the interactive map with 50 assets across 10 Permian Basin stations. KPI cards show critical/warning/healthy counts. Alert sidebar lists at-risk assets sorted by urgency.
+Open the app — see the interactive map with 50 assets across 10 Permian Basin stations. KPI cards show critical/warning/healthy counts. Alert sidebar lists at-risk assets sorted by urgency.
 
 ### Scenario 2: Asset Deep-Dive (1 minute)
-Click on **Asset 27** (critical, bearing wear). The detail page shows sensor trend charts with ML confidence and RUL threshold reference lines. Vibration and temperature are trending up — classic bearing wear signature.
+Click on Asset 27 (critical, bearing wear). The detail page shows sensor trend charts with ML confidence and RUL threshold reference lines. Vibration and temperature are trending up — classic bearing wear signature.
 
 ### Scenario 3: AI Assistant (1 minute)
-Open the chat panel and ask: *"What's wrong with asset 27 and what should I do?"*
+Open the chat panel and ask: "What's wrong with asset 27 and what should I do?"
 
 The Cortex Agent orchestrates 3 tools:
 - **fleet_analyst** (Cortex Analyst) — retrieves prediction data
@@ -188,35 +138,32 @@ The Cortex Agent orchestrates 3 tools:
 ### Scenario 4: Route Planning with Co-Maintenance (1 minute)
 Go to Dispatch Service → select a technician → plan route for Asset 27. The app bundles nearby at-risk assets into an optimized multi-stop route with parts lists and travel estimates.
 
-**Co-Maintenance**: The route planner identifies additional maintenance tasks that can be performed opportunistically while visiting each stop. These recommendations are based on:
+**Co-Maintenance**: The route planner identifies additional maintenance tasks that can be performed opportunistically while visiting each stop based on:
 - Upcoming scheduled maintenance (within 7 days)
 - Preventive maintenance intervals
 - Nearby assets with early warning indicators
-
-Ask the AI assistant: *"Explain this route plan"* — Cortex Agent will describe why each co-maintenance task was recommended based on sensor trends and maintenance history.
 
 ### Scenario 5: Time Travel (30 seconds)
 Use the time slider to rewind to March 6 — everything was healthy. Fast-forward day by day to watch assets degrade. This shows how early detection enables proactive maintenance.
 
 ## Configuration
 
-| Variable | Description | Default |
-|---|---|---|
-| `DATA_NOW_TS` | Demo "current" timestamp | `2026-03-13T00:00:00` |
-| `PDM_DEMO_WH` | Warehouse size | MEDIUM |
-| `PDM_DEMO_POOL` | Compute pool instance | CPU_X64_XS |
+| Setting | Default | Description |
+|---------|---------|-------------|
+| DATA_NOW_TS | 2026-03-13T00:00:00 | Demo "current" timestamp |
+| PDM_DEMO_WH | MEDIUM | Warehouse size |
+| PDM_DEMO_POOL | CPU_X64_XS | Compute pool instance |
 
-The demo data is frozen at **2026-03-13**. The Time Travel slider simulates different points in time by filtering predictions and telemetry to the selected timestamp.
+The demo data is frozen at 2026-03-13. The Time Travel slider simulates different points in time by filtering predictions and telemetry to the selected timestamp.
 
 ## Key Files
 
 ```
 setup.sh                      # Automated setup (run this)
-teardown.sh                   # Complete cleanup
+teardown.sh                   # Complete cleanup (preserves user RSA keys)
+data/                         # Pre-exported seed data (gzipped CSVs)
 snowflake/setup.sql           # DDL: database, tables, views, stages, role
-data/                         # Static seed data (gzipped CSVs)
-snowflake/score_fleet_sp.sql   # ML scoring stored procedure (runs in Snowflake)
-snowflake/score_fleet.py      # Alternative: local scoring script (reference)
+snowflake/score_fleet_sp.sql  # ML scoring stored procedure (reference)
 snowflake/cortex_services.sql # Cortex Search + Semantic View
 snowflake/cortex_agent.sql    # PDM_AGENT definition
 snowflake/route_planner_sp.sql # PLAN_ROUTE stored procedure
@@ -225,7 +172,7 @@ snowflake/teardown.sql        # Cleanup SQL
 frontend/                     # Next.js application source
 frontend/Dockerfile           # Container build
 frontend/pdm_service.yaml.template # Service spec template
-docs/pdm_architecture.drawio  # Architecture diagrams (4 tabs)
+docs/                         # Documentation
 notebooks/                    # ML training notebooks (reference)
 ```
 
@@ -235,36 +182,32 @@ notebooks/                    # ML training notebooks (reference)
 ./teardown.sh
 ```
 
-Or manually:
+The teardown script removes all PDM-specific resources but **does NOT remove user RSA keys** (to avoid breaking other SPCS apps).
+
+To manually remove RSA keys if needed:
 ```sql
-DROP SERVICE IF EXISTS PDM_DEMO.APP.PDM_FRONTEND;
-DROP COMPUTE POOL IF EXISTS PDM_DEMO_POOL;
-DROP AGENT IF EXISTS PDM_DEMO.APP.PDM_AGENT;
-DROP CORTEX SEARCH SERVICE IF EXISTS PDM_DEMO.APP.MANUAL_SEARCH;
-DROP EXTERNAL ACCESS INTEGRATION IF EXISTS PDM_CORTEX_EXTERNAL_ACCESS;
-DROP EXTERNAL ACCESS INTEGRATION IF EXISTS PDM_DEMO_EXTERNAL_ACCESS;
-DROP DATABASE IF EXISTS PDM_DEMO;
-DROP ROLE IF EXISTS DEMO_PDM_ADMIN;
-DROP WAREHOUSE IF EXISTS PDM_DEMO_WH;
+ALTER USER <username> UNSET RSA_PUBLIC_KEY;
+ALTER USER <username> UNSET RSA_PUBLIC_KEY_2;
 ```
-
-## Troubleshooting
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed solutions to common issues.
-
-### Quick Fixes
-
-| Issue | Cause | Fix |
-|---|---|---|
-| Service stuck in PENDING | Compute pool not active | `DESCRIBE COMPUTE POOL PDM_DEMO_POOL;` — wait for ACTIVE |
-| Cortex Agent returns errors | Missing external access | Verify `PDM_CORTEX_EXTERNAL_ACCESS` has the correct host |
-| Asset 27 shows wrong risk | TIMESTAMP_NTZ cast missing | Already fixed in this repo — redeploy `route_planner_sp.sql` |
-| Map tiles not loading | OSM egress blocked | Check `PDM_DEMO_EXTERNAL_ACCESS` integration |
-| Docker push unauthorized | Registry login expired | Re-run `snow spcs image-registry login --connection <conn>` |
 
 ## Reset Demo State
 
 To clear scheduled work orders and reset the dispatch state:
+
 ```sql
 CALL PDM_DEMO.APP.RESET_DEMO();
 ```
+
+## Troubleshooting
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed solutions.
+
+### Quick Fixes
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Service stuck in PENDING | Compute pool not active | `DESCRIBE COMPUTE POOL PDM_DEMO_POOL;` — wait for ACTIVE |
+| Cortex Agent returns errors | Missing external access | Verify PDM_CORTEX_EXTERNAL_ACCESS has the correct host |
+| Map tiles not loading | OSM egress blocked | Check PDM_DEMO_EXTERNAL_ACCESS integration |
+| Docker push unauthorized | Registry login expired | Re-run `snow spcs image-registry login --connection <conn>` |
+| RSA key conflict | Another app using same key | Use RSA_PUBLIC_KEY_2 option during setup |
