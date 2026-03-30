@@ -1,7 +1,6 @@
 "use client";
 
 import clsx from "clsx";
-import { shiftDate } from "@/components/TimeTravel/TimeTravelContext";
 
 interface ScheduleBlock {
   TECH_ID: string;
@@ -26,20 +25,14 @@ const BLOCK_STYLES: Record<string, { bg: string; text: string }> = {
   WORK_ORDER: { bg: "bg-red-100", text: "text-red-700" },
   TRAVEL: { bg: "bg-blue-100", text: "text-blue-700" },
   ON_CALL: { bg: "bg-amber-100", text: "text-amber-700" },
+  PTO: { bg: "bg-gray-200", text: "text-gray-600" },
 };
 
-function computeDisplayOffset(): number {
-  const dataNow = new Date("2026-03-13T00:00:00");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today.getTime() - dataNow.getTime();
-}
-
-const DISPLAY_OFFSET_MS = computeDisplayOffset();
-
-export function TechScheduleGantt({ schedules, technicians, startDate = "2026-03-13", numDays = 7 }: TechScheduleGanttProps) {
+export function TechScheduleGantt({ schedules, technicians, startDate, numDays = 7 }: TechScheduleGanttProps) {
+  const baseDate = startDate ? new Date(startDate + "T00:00:00") : new Date();
+  baseDate.setHours(0, 0, 0, 0);
+  
   const dates: string[] = [];
-  const baseDate = new Date(startDate + "T00:00:00");
   for (let i = 0; i < numDays; i++) {
     const d = new Date(baseDate);
     d.setDate(d.getDate() + i);
@@ -47,7 +40,6 @@ export function TechScheduleGantt({ schedules, technicians, startDate = "2026-03
   }
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
   const todayStr = new Date().toISOString().slice(0, 10);
 
   const scheduleMap: Record<string, Record<string, ScheduleBlock[]>> = {};
@@ -66,10 +58,9 @@ export function TechScheduleGantt({ schedules, technicians, startDate = "2026-03
               Technician
             </th>
             {dates.map((d) => {
-              const displayDate = shiftDate(d + "T00:00:00", DISPLAY_OFFSET_MS).slice(0, 10);
-              const dt = new Date(displayDate + "T12:00:00");
+              const dt = new Date(d + "T12:00:00");
               const dayName = dayNames[dt.getDay()];
-              const isToday = displayDate === todayStr;
+              const isToday = d === todayStr;
               return (
                 <th
                   key={d}
@@ -79,7 +70,7 @@ export function TechScheduleGantt({ schedules, technicians, startDate = "2026-03
                   )}
                 >
                   <div className="font-medium">{dayName}</div>
-                  <div className="text-[10px]">{displayDate.slice(5)}</div>
+                  <div className="text-[10px]">{d.slice(5)}</div>
                 </th>
               );
             })}

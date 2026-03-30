@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from "react";
 
 interface TimeTravelState {
   asOfTimestamp: string | null;
@@ -11,6 +11,15 @@ interface TimeTravelState {
   reset: () => void;
   toDisplayDate: (dataTs: string) => string;
   dataNow: string;
+  isLoading: boolean;
+}
+
+function getInitialDate(): string {
+  try {
+    return new Date().toISOString().slice(0, 10) + "T00:00:00";
+  } catch {
+    return "2026-03-26T00:00:00";
+  }
 }
 
 const TimeTravelContext = createContext<TimeTravelState>({
@@ -21,73 +30,101 @@ const TimeTravelContext = createContext<TimeTravelState>({
   setCustomTime: () => {},
   reset: () => {},
   toDisplayDate: (d) => d,
-  dataNow: "",
+  dataNow: getInitialDate(),
+  isLoading: true,
 });
 
 export function useTimeTravel() {
   return useContext(TimeTravelContext);
 }
 
-const DATA_NOW_TS = "2026-03-13T00:00:00";
-
-const OFFSETS: Record<string, string> = {
-  "Now":  DATA_NOW_TS,
-  "+24h": "2026-03-14T00:00:00",
-  "+72h": "2026-03-16T00:00:00",
-  "+7d":  "2026-03-20T00:00:00",
-};
-
-function computeOffsetMs(): number {
-  const dataNow = new Date("2026-03-13T00:00:00");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today.getTime() - dataNow.getTime();
+function addDays(baseTs: string, days: number): string {
+  if (!baseTs) return getInitialDate();
+  try {
+    const d = new Date(baseTs);
+    if (isNaN(d.getTime())) return getInitialDate();
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10) + "T00:00:00";
+  } catch {
+    return getInitialDate();
+  }
 }
 
-export function shiftDate(dataTs: string, offsetMs: number): string {
-  const d = new Date(dataTs);
-  d.setTime(d.getTime() + offsetMs);
-  return d.toISOString().slice(0, 19).replace("T", " ");
+function computeOffsets(dataNowTs: string): Record<string, string> {
+  return {
+    "Now":  dataNowTs,
+    "+24h": addDays(dataNowTs, 1),
+    "+72h": addDays(dataNowTs, 3),
+    "+7d":  addDays(dataNowTs, 7),
+  };
+}
+
+export function shiftDate(dataTs: string): string {
+  try {
+    const d = new Date(dataTs);
+    if (isNaN(d.getTime())) return dataTs;
+    return d.toISOString().slice(0, 19).replace("T", " ");
+  } catch {
+    return dataTs;
+  }
 }
 
 export function TimeTravelProvider({ children }: { children: ReactNode }) {
-  const [asOfTimestamp, setAsOfTimestamp] = useState<string | null>(DATA_NOW_TS);
+  const initialDate = getInitialDate();
+  const [dataNowTs, setDataNowTs] = useState<string>(initialDate);
+  const [isLoading, setIsLoading] = useState(true);
+  const [asOfTimestamp, setAsOfTimestamp] = useState<string | null>(initialDate);
   const [activeOffset, setActiveOffset] = useState<string | null>("Now");
 
-  const offsetMs = useMemo(() => computeOffsetMs(), []);
+  useEffect(() => {
+    fetch("/api/time-anchor")
+      .then((res) => res.json())
+      .then((data) => {
+        const nowTs = data.now?.replace(" ", "T") || getInitialDate();
+        setDataNowTs(nowTs);
+        setAsOfTimestamp(nowTs);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setIsLoading(false);
+      });
+  }, []);
+
+  const offsets = useMemo(() => computeOffsets(dataNowTs), [dataNowTs]);
 
   const toDisplayDate = useCallback((dataTs: string) => {
-    return shiftDate(dataTs, offsetMs);
-  }, [offsetMs]);
+    return shiftDate(dataTs);
+  }, []);
 
   const setOffset = useCallback((label: string) => {
-    const ts = OFFSETS[label];
+    const ts = offsets[label];
     if (ts) {
       setAsOfTimestamp(ts);
       setActiveOffset(label);
     }
-  }, []);
+  }, [offsets]);
 
   const setCustomTime = useCallback((ts: string) => {
     setAsOfTimestamp(ts);
   }, []);
 
   const reset = useCallback(() => {
-    setAsOfTimestamp(DATA_NOW_TS);
+    setAsOfTimestamp(dataNowTs);
     setActiveOffset("Now");
-  }, []);
+  }, [dataNowTs]);
 
   return (
     <TimeTravelContext.Provider
       value={{
         asOfTimestamp,
         activeOffset,
-        isSimulation: asOfTimestamp !== null && asOfTimestamp !== DATA_NOW_TS,
+        isSimulation: asOfTimestamp !== null && asOfTimestamp !== dataNowTs,
         setOffset,
         setCustomTime,
         reset,
         toDisplayDate,
-        dataNow: DATA_NOW_TS,
+        dataNow: dataNowTs,
+        isLoading,
       }}
     >
       {children}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/snowflake";
+import { safeToISOTimestamp } from "@/lib/dates";
 
 export async function GET(
   _req: NextRequest,
@@ -19,8 +20,7 @@ export async function GET(
 
   rows.forEach((r) => {
     if (r.TS) {
-      const d = r.TS instanceof Date ? r.TS : new Date(r.TS);
-      r.TS = d.toISOString().slice(0, 19).replace("T", " ");
+      r.TS = safeToISOTimestamp(r.TS) || r.TS;
     }
     if (r.PARTS_USED && typeof r.PARTS_USED === "string") {
       r.PARTS_USED = JSON.parse(r.PARTS_USED);

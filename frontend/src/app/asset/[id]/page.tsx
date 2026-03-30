@@ -31,6 +31,7 @@ import {
   Cell,
   ReferenceArea,
   ReferenceLine,
+  Customized,
 } from "recharts";
 
 const TABS = [
@@ -49,29 +50,37 @@ const RISK_BADGE: Record<string, { icon: typeof AlertOctagon; color: string; bg:
   HEALTHY: { icon: ShieldCheck, color: "text-emerald-500", bg: "bg-[var(--emerald-surface)] border-[var(--emerald-border)]" },
 };
 
-const SHARED_SENSORS = [
-  "VIBRATION", "TEMPERATURE", "PRESSURE", "FLOW_RATE", "RPM", "POWER_DRAW",
+const PUMP_SENSORS = [
+  "SUCTION_PRESSURE", "DISCHARGE_PRESSURE", "FLOW_RATE", "MOTOR_CURRENT",
+  "PUMP_SPEED", "BEARING_TEMP", "CASING_TEMP", "VIBRATION_RMS", "VALVE_POSITION", "LEAK_RATE"
 ];
-const PUMP_ONLY_SENSORS = ["DIFFERENTIAL_PRESSURE", "SUCTION_PRESSURE", "SEAL_TEMPERATURE", "CAVITATION_INDEX"];
-const COMPRESSOR_ONLY_SENSORS = ["DISCHARGE_TEMP", "INLET_TEMP", "COMPRESSION_RATIO", "OIL_PRESSURE"];
+const COMPRESSOR_SENSORS = [
+  "VIBRATION", "TEMPERATURE", "PRESSURE", "FLOW_RATE", "RPM", "POWER_DRAW",
+  "DISCHARGE_TEMP", "INLET_TEMP", "COMPRESSION_RATIO", "OIL_PRESSURE"
+];
 
 function getSensorsForType(assetType: string | undefined) {
-  if (assetType === "PUMP") return [...SHARED_SENSORS, ...PUMP_ONLY_SENSORS];
-  if (assetType === "COMPRESSOR") return [...SHARED_SENSORS, ...COMPRESSOR_ONLY_SENSORS];
-  return [...SHARED_SENSORS, ...PUMP_ONLY_SENSORS, ...COMPRESSOR_ONLY_SENSORS];
+  if (assetType === "PUMP") return PUMP_SENSORS;
+  if (assetType === "COMPRESSOR") return COMPRESSOR_SENSORS;
+  return PUMP_SENSORS;
 }
 
 const SENSOR_COLORS: Record<string, string> = {
+  SUCTION_PRESSURE: "#14b8a6",
+  DISCHARGE_PRESSURE: "#3b82f6",
+  FLOW_RATE: "#10b981",
+  MOTOR_CURRENT: "#ec4899",
+  PUMP_SPEED: "#8b5cf6",
+  BEARING_TEMP: "#f59e0b",
+  CASING_TEMP: "#f97316",
+  VIBRATION_RMS: "#ef4444",
+  VALVE_POSITION: "#06b6d4",
+  LEAK_RATE: "#6366f1",
   VIBRATION: "#ef4444",
   TEMPERATURE: "#f59e0b",
   PRESSURE: "#3b82f6",
-  FLOW_RATE: "#10b981",
   RPM: "#8b5cf6",
   POWER_DRAW: "#ec4899",
-  DIFFERENTIAL_PRESSURE: "#06b6d4",
-  SUCTION_PRESSURE: "#14b8a6",
-  SEAL_TEMPERATURE: "#f97316",
-  CAVITATION_INDEX: "#6366f1",
   DISCHARGE_TEMP: "#e11d48",
   INLET_TEMP: "#0ea5e9",
   COMPRESSION_RATIO: "#84cc16",
@@ -80,48 +89,62 @@ const SENSOR_COLORS: Record<string, string> = {
 
 const FAILURE_CONTRIBUTING_SENSORS: Record<string, Record<string, string[]>> = {
   BEARING_WEAR: {
-    PUMP: ["VIBRATION", "TEMPERATURE", "RPM", "POWER_DRAW"],
-    COMPRESSOR: ["VIBRATION", "TEMPERATURE", "RPM", "OIL_PRESSURE", "POWER_DRAW"],
+    PUMP: ["VIBRATION_RMS", "BEARING_TEMP", "MOTOR_CURRENT", "CASING_TEMP"],
+    COMPRESSOR: ["VIBRATION", "TEMPERATURE", "OIL_PRESSURE", "RPM", "POWER_DRAW"],
+  },
+  CAVITATION: {
+    PUMP: ["SUCTION_PRESSURE", "VIBRATION_RMS", "FLOW_RATE", "DISCHARGE_PRESSURE"],
+    COMPRESSOR: ["VIBRATION", "PRESSURE", "FLOW_RATE"],
   },
   VALVE_FAILURE: {
-    PUMP: ["PRESSURE", "FLOW_RATE", "DIFFERENTIAL_PRESSURE", "TEMPERATURE"],
+    PUMP: ["VALVE_POSITION", "FLOW_RATE", "DISCHARGE_PRESSURE", "MOTOR_CURRENT"],
     COMPRESSOR: ["PRESSURE", "FLOW_RATE", "DISCHARGE_TEMP", "COMPRESSION_RATIO"],
   },
-  SEAL_LEAK: {
-    PUMP: ["PRESSURE", "SEAL_TEMPERATURE", "FLOW_RATE", "SUCTION_PRESSURE", "CAVITATION_INDEX"],
-    COMPRESSOR: ["PRESSURE", "FLOW_RATE", "VIBRATION"],
-  },
   OVERHEATING: {
-    PUMP: ["TEMPERATURE", "POWER_DRAW", "SEAL_TEMPERATURE"],
+    PUMP: ["BEARING_TEMP", "CASING_TEMP", "MOTOR_CURRENT", "VIBRATION_RMS"],
     COMPRESSOR: ["TEMPERATURE", "DISCHARGE_TEMP", "POWER_DRAW", "OIL_PRESSURE"],
   },
-  SURGE: {
-    PUMP: ["FLOW_RATE", "PRESSURE", "VIBRATION"],
-    COMPRESSOR: ["COMPRESSION_RATIO", "DISCHARGE_TEMP", "FLOW_RATE", "PRESSURE", "VIBRATION", "OIL_PRESSURE"],
+  SEAL_LEAK: {
+    PUMP: ["LEAK_RATE", "DISCHARGE_PRESSURE", "FLOW_RATE", "SUCTION_PRESSURE"],
+    COMPRESSOR: ["VIBRATION", "TEMPERATURE", "PRESSURE", "FLOW_RATE", "OIL_PRESSURE"],
+  },
+  OFFLINE: {
+    PUMP: ["FLOW_RATE", "MOTOR_CURRENT", "PUMP_SPEED", "VIBRATION_RMS"],
+    COMPRESSOR: ["VIBRATION", "TEMPERATURE", "PRESSURE", "FLOW_RATE"],
+  },
+  FAILED: {
+    PUMP: ["FLOW_RATE", "MOTOR_CURRENT", "PUMP_SPEED", "VIBRATION_RMS"],
+    COMPRESSOR: ["VIBRATION", "TEMPERATURE", "PRESSURE", "FLOW_RATE", "RPM", "POWER_DRAW"],
   },
 };
 
 function getContributingSensors(failureMode: string, assetType: string | undefined): string[] {
   const modeMap = FAILURE_CONTRIBUTING_SENSORS[failureMode];
-  if (!modeMap) return SHARED_SENSORS;
-  return modeMap[assetType || "PUMP"] || modeMap.PUMP || SHARED_SENSORS;
+  const defaultSensors = assetType === "PUMP" ? PUMP_SENSORS : COMPRESSOR_SENSORS;
+  if (!modeMap) return defaultSensors.slice(0, 4);
+  return modeMap[assetType || "PUMP"] || modeMap.PUMP || defaultSensors.slice(0, 4);
 }
 
 const NOMINAL_BOUNDS: Record<string, { min: number; max: number }> = {
-  VIBRATION: { min: 1.5, max: 5.5 },
-  TEMPERATURE: { min: 155, max: 210 },
-  PRESSURE: { min: 180, max: 820 },
-  FLOW_RATE: { min: 280, max: 2050 },
-  RPM: { min: 1450, max: 3650 },
-  POWER_DRAW: { min: 40, max: 500 },
-  DIFFERENTIAL_PRESSURE: { min: 28, max: 102 },
-  SUCTION_PRESSURE: { min: 48, max: 205 },
-  SEAL_TEMPERATURE: { min: 118, max: 182 },
-  CAVITATION_INDEX: { min: 0.0, max: 0.16 },
-  DISCHARGE_TEMP: { min: 195, max: 355 },
-  INLET_TEMP: { min: 58, max: 125 },
+  SUCTION_PRESSURE: { min: 20, max: 80 },
+  DISCHARGE_PRESSURE: { min: 80, max: 250 },
+  FLOW_RATE: { min: 100, max: 1000 },
+  MOTOR_CURRENT: { min: 50, max: 300 },
+  PUMP_SPEED: { min: 1500, max: 3600 },
+  BEARING_TEMP: { min: 120, max: 180 },
+  CASING_TEMP: { min: 100, max: 160 },
+  VIBRATION_RMS: { min: 0.1, max: 0.5 },
+  VALVE_POSITION: { min: 10, max: 90 },
+  LEAK_RATE: { min: 0, max: 0.5 },
+  VIBRATION: { min: 0.15, max: 0.55 },
+  TEMPERATURE: { min: 130, max: 180 },
+  PRESSURE: { min: 120, max: 200 },
+  RPM: { min: 2000, max: 3200 },
+  POWER_DRAW: { min: 80, max: 250 },
+  DISCHARGE_TEMP: { min: 110, max: 160 },
+  INLET_TEMP: { min: 80, max: 140 },
   COMPRESSION_RATIO: { min: 1.5, max: 4.0 },
-  OIL_PRESSURE: { min: 38, max: 82 },
+  OIL_PRESSURE: { min: 10, max: 50 },
 };
 
 export default function AssetDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -131,7 +154,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const [tab, setTab] = useState<TabId>("overview");
   const [activeSensors, setActiveSensors] = useState<Set<string>>(new Set());
   const [sensorsInitialized, setSensorsInitialized] = useState(false);
-  const [chartRange, setChartRange] = useState("60");
+  const [chartRange, setChartRange] = useState("30");
 
   const { data: asset } = useQuery({
     queryKey: ["asset", assetId, asOfTimestamp],
@@ -147,34 +170,27 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
     if (predictedClass !== "NORMAL") {
       defaultSensors = getContributingSensors(predictedClass, asset?.ASSET_TYPE);
     } else {
-      const probs = pred?.CLASS_PROBABILITIES;
-      let parsed = probs;
-      if (typeof parsed === "string") try { parsed = JSON.parse(parsed); } catch { parsed = null; }
-      if (parsed && typeof parsed === "object") {
-        const nonNormal = Object.entries(parsed as Record<string, number>)
-          .filter(([k]) => k !== "NORMAL")
-          .sort((a, b) => b[1] - a[1]);
-        if (nonNormal.length > 0 && nonNormal[0][1] > 0) {
-          defaultSensors = getContributingSensors(nonNormal[0][0], asset?.ASSET_TYPE);
-        } else {
-          defaultSensors = SHARED_SENSORS;
-        }
+      const topFeature = pred?.TOP_FEATURE_1;
+      if (topFeature) {
+        defaultSensors = [topFeature, ...(pred?.TOP_FEATURE_2 ? [pred.TOP_FEATURE_2] : []), ...(pred?.TOP_FEATURE_3 ? [pred.TOP_FEATURE_3] : [])];
       } else {
-        defaultSensors = SHARED_SENSORS;
+        defaultSensors = getSensorsForType(asset?.ASSET_TYPE).slice(0, 4);
       }
     }
     setActiveSensors(new Set(defaultSensors));
     setSensorsInitialized(true);
   }
 
-  const telemetryStart = useMemo(() => {
+  const chartCutoff = useMemo(() => {
     if (chartRange === "all") return undefined;
     const days = parseInt(chartRange);
-    const ref = asOfTimestamp || "2026-03-13T00:00:00";
+    const ref = asOfTimestamp || "2026-03-25T23:55:00";
     const d = new Date(ref);
     d.setDate(d.getDate() - days);
     return d.toISOString().slice(0, 19);
   }, [chartRange, asOfTimestamp]);
+
+  const telemetryStart = chartCutoff;
 
   const sensorListStr = useMemo(() => {
     return activeSensors.size > 0 ? Array.from(activeSensors).join(",") : undefined;
@@ -193,6 +209,12 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
     enabled: tab === "overview" || tab === "trends",
     placeholderData: (prev) => prev,
   });
+
+  const filteredPredHistory = useMemo(() => {
+    if (!predHistory) return [];
+    if (!chartCutoff) return predHistory;
+    return predHistory.filter((p: any) => p.AS_OF_TS >= chartCutoff);
+  }, [predHistory, chartCutoff]);
 
   const { data: maintenance } = useQuery({
     queryKey: ["maintenance", assetId],
@@ -220,13 +242,17 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const mlConfidenceTs = useMemo(() => {
     if (!predHistory || predHistory.length === 0) return null;
     for (const p of predHistory) {
-      let probs = p.CLASS_PROBABILITIES;
-      if (typeof probs === "string") try { probs = JSON.parse(probs); } catch { continue; }
-      if (!probs || typeof probs !== "object") continue;
-      const nonNormal = Object.entries(probs as Record<string, number>)
-        .filter(([k]) => k !== "NORMAL")
-        .reduce((max, [, v]) => Math.max(max, Number(v)), 0);
-      if (nonNormal > 0.5) return p.AS_OF_TS;
+      if (p.CONFIDENCE != null && p.CONFIDENCE >= 0.5 && p.PREDICTED_CLASS && p.PREDICTED_CLASS !== "NORMAL") {
+        return p.AS_OF_TS;
+      }
+    }
+    return null;
+  }, [predHistory]);
+
+  const mlDetectedTs = useMemo(() => {
+    if (!predHistory || predHistory.length === 0) return null;
+    for (const p of predHistory) {
+      if (p.PREDICTED_CLASS && p.PREDICTED_CLASS !== "NORMAL") return p.AS_OF_TS;
     }
     return null;
   }, [predHistory]);
@@ -234,7 +260,15 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const rulWarningTs = useMemo(() => {
     if (!predHistory || predHistory.length === 0) return null;
     for (const p of predHistory) {
-      if (p.PREDICTED_RUL_DAYS != null && p.PREDICTED_RUL_DAYS <= 30) return p.AS_OF_TS;
+      if (p.PREDICTED_RUL_DAYS != null && p.PREDICTED_RUL_DAYS <= 14) return p.AS_OF_TS;
+    }
+    return null;
+  }, [predHistory]);
+
+  const rulCriticalTs = useMemo(() => {
+    if (!predHistory || predHistory.length === 0) return null;
+    for (const p of predHistory) {
+      if (p.PREDICTED_RUL_DAYS != null && p.PREDICTED_RUL_DAYS <= 7) return p.AS_OF_TS;
     }
     return null;
   }, [predHistory]);
@@ -280,17 +314,13 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       </div>
 
-      {risk === "FAILED" && (
+      {(risk === "FAILED" || risk === "OFFLINE") && (
         <div className="mx-4 mt-3 bg-red-700 text-white rounded-lg p-4 flex items-center gap-3 shadow-lg">
           <AlertOctagon size={24} className="shrink-0" />
           <div>
-            <div className="font-bold text-sm">EQUIPMENT FAILURE</div>
+            <div className="font-bold text-sm">EQUIPMENT {risk === "OFFLINE" ? "OFFLINE" : "FAILURE"}</div>
             <div className="text-xs text-red-200">
-              {predictedClass === "EQUIPMENT_FAILURE" ? (
-                <>This asset has experienced a breakdown. Previous failure mode: <span className="font-semibold">{(predHistory || []).find((p: any) => p.PREDICTED_CLASS !== "NORMAL" && p.PREDICTED_CLASS !== "EQUIPMENT_FAILURE")?.PREDICTED_CLASS?.replace("_", " ") || "unknown"}</span>. Immediate dispatch required.</>
-              ) : (
-                <>Asset is in a failed state. Immediate maintenance dispatch required.</>
-              )}
+              This asset has experienced a failure ({predictedClass?.replace(/_/g, " ") || "unknown mode"}). RUL has reached zero. Immediate dispatch required.
             </div>
           </div>
         </div>
@@ -318,54 +348,72 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         {tab === "overview" && (
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2 space-y-4">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
-                  <div className="text-xs text-[var(--muted)] mb-1">Predicted Failure</div>
-                  <div className="text-lg font-bold text-[var(--foreground)]">{pred?.PREDICTED_CLASS || "NORMAL"}</div>
-                </div>
-                <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
-                  <div className="text-xs text-[var(--muted)] mb-1">RUL (days)</div>
-                  <div className="text-lg font-bold text-[var(--foreground)]">{pred?.PREDICTED_RUL_DAYS?.toFixed(1) || "—"}</div>
-                </div>
-                <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
-                  <div className="text-xs text-[var(--muted)] mb-1">Model Version</div>
-                  <div className="text-lg font-bold text-[var(--foreground)]">{pred?.MODEL_VERSION || "—"}</div>
+              <div className="flex items-center justify-between">
+                <div className="grid grid-cols-3 gap-3 flex-1">
+                  <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
+                    <div className="text-xs text-[var(--muted)] mb-1">Predicted Failure</div>
+                    <div className="text-lg font-bold text-[var(--foreground)]">{pred?.PREDICTED_CLASS || "NORMAL"}</div>
+                  </div>
+                  <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
+                    <div className="text-xs text-[var(--muted)] mb-1">RUL (days)</div>
+                    <div className="text-lg font-bold text-[var(--foreground)]">{pred?.PREDICTED_RUL_DAYS?.toFixed(1) || "—"}</div>
+                  </div>
+                  <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
+                    <div className="text-xs text-[var(--muted)] mb-1">Confidence</div>
+                    <div className="text-lg font-bold text-[var(--foreground)]">{pred?.CONFIDENCE ? `${(pred.CONFIDENCE * 100).toFixed(0)}%` : "—"}</div>
+                  </div>
                 </div>
               </div>
-              {pred?.CLASS_PROBABILITIES && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-[var(--muted)]">Chart Range:</span>
+                {[{ label: "30d", v: "30" }, { label: "60d", v: "60" }, { label: "All", v: "all" }].map((r) => (
+                  <button
+                    key={r.v}
+                    onClick={() => setChartRange(r.v)}
+                    className={clsx(
+                      "px-2 py-0.5 rounded-md border transition-colors",
+                      chartRange === r.v
+                        ? "bg-indigo-600 text-white border-transparent"
+                        : "bg-[var(--card)] text-[var(--muted)] border-[var(--border)] hover:bg-[var(--hover)]"
+                    )}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+              {pred?.TOP_FEATURE_1 && pred?.PREDICTED_CLASS && pred?.PREDICTED_CLASS !== 'NORMAL' && (
                 <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
-                  <div className="text-xs text-[var(--muted)] mb-3">Class Probabilities</div>
-                  <div className="h-48">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={Object.entries(
-                          typeof pred.CLASS_PROBABILITIES === "string"
-                            ? JSON.parse(pred.CLASS_PROBABILITIES)
-                            : pred.CLASS_PROBABILITIES
-                        ).map(([name, value]) => ({ name, value: Number(value) }))}
-                        layout="vertical"
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                        <XAxis type="number" domain={[0, 1]} stroke="var(--chart-axis)" tick={{ fontSize: 11 }} />
-                        <YAxis type="category" dataKey="name" width={120} stroke="var(--chart-axis)" tick={{ fontSize: 11 }} />
-                        <Tooltip
-                          contentStyle={{ background: "var(--tooltip-bg)", border: "1px solid var(--tooltip-border)", borderRadius: 8 }}
-                          formatter={(v: number) => [v.toFixed(4), "Probability"]}
-                        />
-                        <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                          {Object.entries(
-                            typeof pred.CLASS_PROBABILITIES === "string"
-                              ? JSON.parse(pred.CLASS_PROBABILITIES)
-                              : pred.CLASS_PROBABILITIES
-                          ).map(([name], i) => (
-                            <Cell
-                              key={i}
-                              fill={name === pred.PREDICTED_CLASS ? "#ef4444" : "#94a3b8"}
-                            />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                  <div className="text-xs text-[var(--muted)] mb-3">Sensor Contribution to Prediction</div>
+                  <div className="py-2">
+                    {(() => {
+                      const humanize = (n: string) => n.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                      const failureClass = pred.PREDICTED_CLASS;
+                      const assetType = asset?.ASSET_TYPE || "PUMP";
+                      const contributingSensors = FAILURE_CONTRIBUTING_SENSORS[failureClass]?.[assetType] || [];
+                      const topFeature = pred.TOP_FEATURE_1;
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-[var(--foreground)]">Primary Indicator:</span>
+                            <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-sm font-medium">
+                              {humanize(topFeature)}
+                            </span>
+                          </div>
+                          {contributingSensors.length > 1 && (
+                            <div>
+                              <span className="text-xs text-[var(--muted)]">Other contributing sensors for {humanize(failureClass)}:</span>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {contributingSensors.filter(s => s !== topFeature).map((sensor, i) => (
+                                  <span key={i} className="px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded text-xs">
+                                    {humanize(sensor)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -374,7 +422,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                   <div className="text-xs text-[var(--muted)] mb-3">RUL Projection</div>
                   <div className="h-48">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={(predHistory || []).filter((p: any) => p.PREDICTED_RUL_DAYS != null)}>
+                      <LineChart data={filteredPredHistory.filter((p: any) => p.PREDICTED_RUL_DAYS != null)}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                         <XAxis dataKey="AS_OF_TS" stroke="var(--chart-axis)" tick={{ fontSize: 10 }} tickFormatter={(v) => displayDate(v)} />
                         <YAxis stroke="var(--chart-axis)" tick={{ fontSize: 11 }} label={{ value: "RUL (days)", angle: -90, position: "insideLeft", fill: "var(--chart-axis)", fontSize: 11 }} />
@@ -385,12 +433,18 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         {isSimulation && pred?.AS_OF_TS && (
                           <ReferenceLine x={pred.AS_OF_TS} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" label={{ value: activeOffset || "Sim", position: "top", fill: "#3b82f6", fontSize: 10, fontWeight: 600 }} />
                         )}
-                        {rulWarningTs && (
-                          <ReferenceLine x={rulWarningTs} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 4" label={{ value: "RUL ≤30d", position: "insideTopRight", fill: "#f59e0b", fontSize: 10 }} />
+                        <ReferenceArea y1={0} y2={7} fill="#ef4444" fillOpacity={0.12} label={{ value: "CRITICAL ZONE", fill: "#ef4444", fontSize: 9, position: "insideRight" }} />
+                        <ReferenceArea y1={7} y2={14} fill="#f59e0b" fillOpacity={0.08} label={{ value: "WARNING ZONE", fill: "#f59e0b", fontSize: 9, position: "insideRight" }} />
+                        {mlConfidenceTs && (
+                          <ReferenceLine x={mlConfidenceTs} stroke="#8b5cf6" strokeWidth={2.5} label={{ value: "Detected", position: "top", fill: "#8b5cf6", fontSize: 11, fontWeight: 700 }} />
                         )}
-                        <ReferenceArea y1={0} y2={7} fill="#ef4444" fillOpacity={0.06} />
-                        <ReferenceArea y1={7} y2={30} fill="#f59e0b" fillOpacity={0.04} />
-                        <Line type="monotone" dataKey="PREDICTED_RUL_DAYS" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                        {rulWarningTs && (
+                          <ReferenceLine x={rulWarningTs} stroke="#f59e0b" strokeWidth={2.5} label={{ value: "Warning", position: "insideTopRight", fill: "#f59e0b", fontSize: 11, fontWeight: 700 }} />
+                        )}
+                        {rulCriticalTs && (
+                          <ReferenceLine x={rulCriticalTs} stroke="#ef4444" strokeWidth={2.5} label={{ value: "Critical", position: "insideBottomRight", fill: "#ef4444", fontSize: 11, fontWeight: 700 }} />
+                        )}
+                        <Line type="monotone" dataKey="PREDICTED_RUL_DAYS" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -479,16 +533,22 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
             {Array.from(activeSensors).map((sensor) => {
               const bounds = NOMINAL_BOUNDS[sensor];
               const sensorData = (telemetry || []).filter((r: any) => r[sensor] != null);
-              const findTs = (target: string | null) => {
+              const findDataPoint = (target: string | null) => {
                 if (!target || sensorData.length === 0) return null;
                 const d = target.slice(0, 10);
-                for (const row of sensorData) {
-                  if (row.TS && row.TS.slice(0, 10) >= d) return row.TS;
+                for (let i = 0; i < sensorData.length; i++) {
+                  const row = sensorData[i];
+                  if (row.TS && row.TS.slice(0, 10) >= d) {
+                    return { ts: row.TS, index: i };
+                  }
                 }
                 return null;
               };
-              const sensorMlTs = contributing.includes(sensor) ? findTs(mlConfidenceTs) : null;
-              const sensorRulTs = contributing.includes(sensor) ? findTs(rulWarningTs) : null;
+              const mlPoint = findDataPoint(mlDetectedTs);
+              const rulPoint = findDataPoint(rulWarningTs);
+              const sensorMlTs = mlPoint?.ts || null;
+              const sensorRulTs = rulPoint?.ts || null;
+              const linesOverlap = mlPoint && rulPoint && mlPoint.index === rulPoint.index;
               const sensorSimTs = isSimulation && asOfTimestamp && sensorData.length > 0 ? (() => {
                 const simDate = asOfTimestamp.slice(0, 10);
                 const lastTs = sensorData[sensorData.length - 1]?.TS;
@@ -513,7 +573,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
               ];
               return (
                 <div key={sensor} className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center flex-wrap gap-2 mb-2">
                     <div className="w-3 h-3 rounded-full" style={{ background: SENSOR_COLORS[sensor] }} />
                     <span className="text-xs font-medium text-[var(--foreground)]">{sensor.replace(/_/g, " ")}</span>
                     {bounds && (
@@ -521,20 +581,32 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         Nominal: {bounds.min} – {bounds.max}
                       </span>
                     )}
-                    {mlConfidenceTs && contributing.includes(sensor) && (
+                    {sensorMlTs && (
                       <span className="text-[10px] text-purple-500 ml-2">
-                        ML Confidence &gt;50%: {displayDate(mlConfidenceTs)}
+                        Anomaly Detected: {displayDate(sensorMlTs)}
                       </span>
                     )}
-                    {rulWarningTs && contributing.includes(sensor) && (
+                    {sensorRulTs && !linesOverlap && (
                       <span className="text-[10px] text-amber-500 ml-1">
-                        · RUL ≤30d: {displayDate(rulWarningTs)}
+                        · RUL ≤14d: {displayDate(sensorRulTs)}
+                      </span>
+                    )}
+                    {linesOverlap && (
+                      <span className="text-[10px] text-orange-500 ml-1">
+                        (same as warning)
                       </span>
                     )}
                   </div>
                   <div className="h-48">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={sensorData}>
+                        <defs>
+                          <linearGradient id={`gradientLine-${sensor}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#8b5cf6" />
+                            <stop offset="50%" stopColor="#f97316" />
+                            <stop offset="100%" stopColor="#f59e0b" />
+                          </linearGradient>
+                        </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                         <XAxis
                           dataKey="TS"
@@ -562,25 +634,50 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             strokeDasharray="3 3"
                           />
                         )}
-                        {sensorMlTs && (
-                          <ReferenceLine
-                            x={sensorMlTs}
-                            stroke="#8b5cf6"
-                            strokeWidth={2}
-                            strokeDasharray="6 6"
-                            label={{ value: "ML Confidence >50%", position: "top", fill: "#8b5cf6", fontSize: 10 }}
-                          />
-                        )}
-                        {sensorRulTs && (
-                          <ReferenceLine
-                            x={sensorRulTs}
-                            stroke="#f59e0b"
-                            strokeWidth={2}
-                            strokeDasharray="6 6"
-                            strokeDashoffset={6}
-                            label={{ value: "RUL ≤30 days", position: "insideTopRight", fill: "#f59e0b", fontSize: 10 }}
-                          />
-                        )}
+                        <Customized
+                          component={({ xAxisMap, yAxisMap }: any) => {
+                            if (!xAxisMap || !yAxisMap) return null;
+                            const xAxis = Object.values(xAxisMap)[0] as any;
+                            const yAxis = Object.values(yAxisMap)[0] as any;
+                            if (!xAxis || !yAxis) return null;
+                            const { x: xStart, width } = xAxis;
+                            const { y: yStart, height } = yAxis;
+                            const dataLen = sensorData.length;
+                            if (dataLen === 0) return null;
+                            const lines: React.ReactNode[] = [];
+                            const calcX = (idx: number) => xStart + (idx / (dataLen - 1)) * width;
+                            if (linesOverlap && mlPoint) {
+                              const xPos = calcX(mlPoint.index);
+                              lines.push(
+                                <g key="overlap">
+                                  <line x1={xPos} y1={yStart} x2={xPos} y2={yStart + height} stroke="#8b5cf6" strokeWidth={3} strokeDasharray="6 3" />
+                                  <line x1={xPos + 3} y1={yStart} x2={xPos + 3} y2={yStart + height} stroke="#f59e0b" strokeWidth={3} />
+                                  <text x={xPos} y={yStart - 4} fill="#f97316" fontSize={11} fontWeight={700} textAnchor="middle">Detected + Warning</text>
+                                </g>
+                              );
+                            } else {
+                              if (mlPoint) {
+                                const xPos = calcX(mlPoint.index);
+                                lines.push(
+                                  <g key="ml">
+                                    <line x1={xPos} y1={yStart} x2={xPos} y2={yStart + height} stroke="#8b5cf6" strokeWidth={2.5} />
+                                    <text x={xPos} y={yStart - 4} fill="#8b5cf6" fontSize={11} fontWeight={700} textAnchor="middle">Detected</text>
+                                  </g>
+                                );
+                              }
+                              if (rulPoint) {
+                                const xPos = calcX(rulPoint.index);
+                                lines.push(
+                                  <g key="rul">
+                                    <line x1={xPos} y1={yStart} x2={xPos} y2={yStart + height} stroke="#f59e0b" strokeWidth={2.5} />
+                                    <text x={xPos + 4} y={yStart - 4} fill="#f59e0b" fontSize={11} fontWeight={700} textAnchor="start">RUL ≤14d</text>
+                                  </g>
+                                );
+                              }
+                            }
+                            return <g>{lines}</g>;
+                          }}
+                        />
                         {sensorSimTs && (
                           <ReferenceLine
                             x={sensorSimTs}
@@ -607,16 +704,16 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
             {activeSensors.size === 0 && (
               <div className="text-sm text-[var(--muted)] text-center py-8">Select sensors above to view trends.</div>
             )}
-            {pred?.PREDICTED_RUL_DAYS != null && (predHistory || []).length > 0 && (
+            {pred?.PREDICTED_RUL_DAYS != null && filteredPredHistory.length > 0 && (
               <div className="bg-[var(--card)] border border-[var(--card-border)] rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-3 h-3 rounded-full bg-amber-500" />
                   <span className="text-xs font-medium text-[var(--foreground)]">RUL Projection</span>
-                  <span className="text-[10px] text-[var(--muted)]">{(predHistory || []).filter((p: any) => p.PREDICTED_RUL_DAYS != null).length} prediction points</span>
+                  <span className="text-[10px] text-[var(--muted)]">{filteredPredHistory.filter((p: any) => p.PREDICTED_RUL_DAYS != null).length} prediction points</span>
                 </div>
                 <div className="h-48">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={(predHistory || []).filter((p: any) => p.PREDICTED_RUL_DAYS != null)}>
+                    <LineChart data={filteredPredHistory.filter((p: any) => p.PREDICTED_RUL_DAYS != null)}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                       <XAxis dataKey="AS_OF_TS" stroke="var(--chart-axis)" tick={{ fontSize: 10 }} tickFormatter={(v) => displayDate(v)} />
                       <YAxis stroke="var(--chart-axis)" tick={{ fontSize: 11 }} label={{ value: "RUL (days)", angle: -90, position: "insideLeft", fill: "var(--chart-axis)", fontSize: 11 }} />
@@ -627,12 +724,18 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                       {isSimulation && pred?.AS_OF_TS && (
                         <ReferenceLine x={pred.AS_OF_TS} stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" label={{ value: activeOffset || "Sim", position: "top", fill: "#3b82f6", fontSize: 10, fontWeight: 600 }} />
                       )}
-                      {rulWarningTs && (
-                        <ReferenceLine x={rulWarningTs} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 4" label={{ value: "RUL ≤30d", position: "insideTopRight", fill: "#f59e0b", fontSize: 10 }} />
+                      <ReferenceArea y1={0} y2={7} fill="#ef4444" fillOpacity={0.12} label={{ value: "CRITICAL ZONE", fill: "#ef4444", fontSize: 9, position: "insideRight" }} />
+                      <ReferenceArea y1={7} y2={14} fill="#f59e0b" fillOpacity={0.08} label={{ value: "WARNING ZONE", fill: "#f59e0b", fontSize: 9, position: "insideRight" }} />
+                      {mlConfidenceTs && (
+                        <ReferenceLine x={mlConfidenceTs} stroke="#8b5cf6" strokeWidth={2.5} label={{ value: "Detected", position: "top", fill: "#8b5cf6", fontSize: 11, fontWeight: 700 }} />
                       )}
-                      <ReferenceArea y1={0} y2={7} fill="#ef4444" fillOpacity={0.06} />
-                      <ReferenceArea y1={7} y2={30} fill="#f59e0b" fillOpacity={0.04} />
-                      <Line type="monotone" dataKey="PREDICTED_RUL_DAYS" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                      {rulWarningTs && (
+                        <ReferenceLine x={rulWarningTs} stroke="#f59e0b" strokeWidth={2.5} label={{ value: "Warning", position: "insideTopRight", fill: "#f59e0b", fontSize: 11, fontWeight: 700 }} />
+                      )}
+                      {rulCriticalTs && (
+                        <ReferenceLine x={rulCriticalTs} stroke="#ef4444" strokeWidth={2.5} label={{ value: "Critical", position: "insideBottomRight", fill: "#ef4444", fontSize: 11, fontWeight: 700 }} />
+                      )}
+                      <Line type="monotone" dataKey="PREDICTED_RUL_DAYS" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

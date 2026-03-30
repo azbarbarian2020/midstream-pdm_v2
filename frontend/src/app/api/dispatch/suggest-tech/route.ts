@@ -29,10 +29,10 @@ export async function POST(req: NextRequest) {
                 p.PREDICTED_CLASS, p.RISK_LEVEL
          FROM PDM_DEMO.RAW.ASSETS a
          JOIN PDM_DEMO.RAW.STATIONS s ON a.STATION_ID = s.STATION_ID
-         LEFT JOIN PDM_DEMO.ANALYTICS.PREDICTIONS p ON a.ASSET_ID = p.ASSET_ID
-              AND p.AS_OF_TS <= ?::TIMESTAMP_NTZ
+         LEFT JOIN PDM_DEMO.ANALYTICS.PREDICTION_HISTORY p ON a.ASSET_ID = p.ASSET_ID
+              AND p.PREDICTION_TS <= ?::TIMESTAMP_NTZ
          WHERE a.ASSET_ID = ?
-         QUALIFY ROW_NUMBER() OVER (PARTITION BY a.ASSET_ID ORDER BY p.AS_OF_TS DESC) = 1`,
+         QUALIFY ROW_NUMBER() OVER (PARTITION BY a.ASSET_ID ORDER BY p.PREDICTION_TS DESC) = 1`,
         [asOfTs, body.primary_asset_id]
       )
     : await query(
@@ -41,8 +41,7 @@ export async function POST(req: NextRequest) {
          FROM PDM_DEMO.RAW.ASSETS a
          JOIN PDM_DEMO.RAW.STATIONS s ON a.STATION_ID = s.STATION_ID
          LEFT JOIN PDM_DEMO.ANALYTICS.PREDICTIONS p ON a.ASSET_ID = p.ASSET_ID
-         WHERE a.ASSET_ID = ?
-         QUALIFY ROW_NUMBER() OVER (PARTITION BY a.ASSET_ID ORDER BY p.AS_OF_TS DESC) = 1`,
+         WHERE a.ASSET_ID = ?`,
         [body.primary_asset_id]
       );
 
@@ -63,7 +62,7 @@ export async function POST(req: NextRequest) {
      ORDER BY t.TECH_ID`
   );
 
-  const baseDate = body.base_date || "2026-03-13";
+  const baseDate = body.base_date || body.as_of_ts?.slice(0, 10) || "2026-03-25";
   const horizonDays = body.horizon_days || 3;
   const booked: any[] = await query(
     `SELECT TECH_ID, TO_CHAR(SCHEDULE_DATE, 'YYYY-MM-DD') AS SCHED_DATE, SUM(ESTIMATED_HOURS) AS BOOKED
@@ -89,7 +88,8 @@ export async function POST(req: NextRequest) {
     let totalBooked = 0;
     let fullyBookedDays = 0;
     for (let d = 0; d < horizonDays; d++) {
-      const dt = new Date(2026, 2, 13 + d);
+      const dt = new Date(baseDate);
+      dt.setDate(dt.getDate() + d);
       const dateStr = dt.toISOString().slice(0, 10);
       const used = bookedMap[`${t.TECH_ID}|${dateStr}`] || 0;
       totalBooked += used;

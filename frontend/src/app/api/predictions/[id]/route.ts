@@ -11,38 +11,47 @@ export async function GET(
   const assetId = parseInt(id, 10);
   const asOfTs = req.nextUrl.searchParams.get("as_of_ts");
 
-  let whereClause = "ASSET_ID = ?";
+  let whereClause = "PUMP_ID = ?";
   const binds: any[] = [assetId];
 
   if (asOfTs) {
-    whereClause += " AND AS_OF_TS <= ?::TIMESTAMP_NTZ";
+    whereClause += " AND TS <= ?::TIMESTAMP_NTZ";
     binds.push(asOfTs);
   }
 
   const sql = `
     WITH base AS (
-      SELECT AS_OF_TS, PREDICTED_CLASS, PREDICTED_RUL_DAYS, RISK_LEVEL, MODEL_VERSION, CLASS_PROBABILITIES,
-             ROW_NUMBER() OVER (ORDER BY AS_OF_TS) AS rn,
-             COUNT(*) OVER () AS total
+      SELECT 
+        TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS') AS AS_OF_TS,
+        TS::DATE AS PREDICTION_DATE,
+        PREDICTED_CLASS, 
+        PREDICTED_RUL_DAYS, 
+        CASE 
+          WHEN PREDICTED_CLASS = 'OFFLINE' THEN 'FAILED'
+          WHEN PREDICTED_CLASS = 'NORMAL' THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS IS NULL THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS <= 7 THEN 'CRITICAL'
+          WHEN PREDICTED_RUL_DAYS <= 14 THEN 'WARNING'
+          ELSE 'HEALTHY'
+        END AS RISK_LEVEL,
+        CONFIDENCE,
+        TOP_FEATURE AS TOP_FEATURE_1,
+        NULL AS TOP_FEATURE_1_DELTA_PCT,
+        NULL AS TOP_FEATURE_2,
+        NULL AS TOP_FEATURE_2_DELTA_PCT,
+        NULL AS TOP_FEATURE_3,
+        NULL AS TOP_FEATURE_3_DELTA_PCT,
+        ROW_NUMBER() OVER (ORDER BY TS) AS rn,
+        COUNT(*) OVER () AS total
       FROM PDM_DEMO.ANALYTICS.PREDICTIONS
       WHERE ${whereClause}
     )
-    SELECT AS_OF_TS, PREDICTED_CLASS, PREDICTED_RUL_DAYS, RISK_LEVEL, MODEL_VERSION, CLASS_PROBABILITIES
+    SELECT *
     FROM base
     WHERE total <= ${MAX_POINTS} OR MOD(rn - 1, CEIL(total / ${MAX_POINTS})) = 0 OR rn = total
     ORDER BY AS_OF_TS`;
 
   const rows: any[] = await query(sql, binds);
-
-  rows.forEach((r) => {
-    if (r.AS_OF_TS) {
-      const d = r.AS_OF_TS instanceof Date ? r.AS_OF_TS : new Date(r.AS_OF_TS);
-      r.AS_OF_TS = d.toISOString().slice(0, 19).replace("T", " ");
-    }
-    if (typeof r.CLASS_PROBABILITIES === "string") {
-      try { r.CLASS_PROBABILITIES = JSON.parse(r.CLASS_PROBABILITIES); } catch {}
-    }
-  });
 
   return NextResponse.json(rows);
 }

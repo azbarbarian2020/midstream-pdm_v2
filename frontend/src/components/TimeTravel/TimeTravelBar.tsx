@@ -2,17 +2,38 @@
 
 import { useTimeTravel } from "@/components/TimeTravel/TimeTravelContext";
 import clsx from "clsx";
-import { Clock, RotateCcw } from "lucide-react";
+import { Clock, RotateCcw, Loader2 } from "lucide-react";
+import { useMemo } from "react";
 
-const OFFSETS = [
-  { label: "Now", value: "Now", ts: "2026-03-13T00:00:00" },
-  { label: "+24h", value: "+24h", ts: "2026-03-14T00:00:00" },
-  { label: "+72h", value: "+72h", ts: "2026-03-16T00:00:00" },
-  { label: "+7d", value: "+7d", ts: "2026-03-20T00:00:00" },
-];
+function addDays(baseTs: string, days: number): string {
+  if (!baseTs) return "";
+  const d = new Date(baseTs);
+  if (isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10) + "T00:00:00";
+}
 
 export function TimeTravelBar() {
-  const { activeOffset, isSimulation, setOffset, reset, toDisplayDate } = useTimeTravel();
+  const { activeOffset, setOffset, reset, toDisplayDate, dataNow, isLoading } = useTimeTravel();
+
+  const OFFSETS = useMemo(() => {
+    if (!dataNow) return [];
+    return [
+      { label: "Now", value: "Now", ts: dataNow },
+      { label: "+24h", value: "+24h", ts: addDays(dataNow, 1) },
+      { label: "+72h", value: "+72h", ts: addDays(dataNow, 3) },
+      { label: "+7d", value: "+7d", ts: addDays(dataNow, 7) },
+    ];
+  }, [dataNow]);
+
+  if (isLoading || !dataNow) {
+    return (
+      <div className="flex items-center gap-3 bg-[var(--surface-secondary)] border border-[var(--border)] rounded-lg px-4 py-2">
+        <Loader2 size={16} className="text-[var(--muted)] animate-spin" />
+        <span className="text-xs text-[var(--muted)]">Loading time data...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-3 bg-[var(--surface-secondary)] border border-[var(--border)] rounded-lg px-4 py-2">
@@ -34,7 +55,7 @@ export function TimeTravelBar() {
             >
               <span>{o.label}</span>
               <span className={clsx("text-[10px] leading-tight", isActive ? "text-blue-200" : "text-[var(--muted)] opacity-70")}>
-                {toDisplayDate(o.ts).slice(5, 10).replace("-", "/")}
+                {o.ts ? toDisplayDate(o.ts).slice(5, 10).replace("-", "/") : ""}
               </span>
             </button>
           );

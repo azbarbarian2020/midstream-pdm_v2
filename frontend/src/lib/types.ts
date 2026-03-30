@@ -22,7 +22,13 @@ export interface Asset {
   PREDICTED_CLASS: string | null;
   PREDICTED_RUL_DAYS: number | null;
   RISK_LEVEL: "HEALTHY" | "WARNING" | "CRITICAL" | "OFFLINE" | "FAILED" | null;
-  CLASS_PROBABILITIES: Record<string, number> | null;
+  CONFIDENCE: number | null;
+  TOP_FEATURE_1: string | null;
+  TOP_FEATURE_1_DELTA_PCT: number | null;
+  TOP_FEATURE_2: string | null;
+  TOP_FEATURE_2_DELTA_PCT: number | null;
+  TOP_FEATURE_3: string | null;
+  TOP_FEATURE_3_DELTA_PCT: number | null;
   ASSIGNED_TECH_ID: string | null;
   ASSIGNED_TECH_NAME: string | null;
 }
@@ -31,11 +37,17 @@ export interface Prediction {
   ASSET_ID: number;
   AS_OF_TS: string;
   PREDICTED_CLASS: string;
-  CLASS_PROBABILITIES: Record<string, number>;
   PREDICTED_RUL_DAYS: number;
   RISK_LEVEL: string;
   MODEL_VERSION: string;
   SCORED_AT: string;
+  CONFIDENCE: number | null;
+  TOP_FEATURE_1: string | null;
+  TOP_FEATURE_1_DELTA_PCT: number | null;
+  TOP_FEATURE_2: string | null;
+  TOP_FEATURE_2_DELTA_PCT: number | null;
+  TOP_FEATURE_3: string | null;
+  TOP_FEATURE_3_DELTA_PCT: number | null;
 }
 
 export interface TelemetryPoint {
@@ -63,7 +75,7 @@ export interface MaintenanceLog {
 
 export interface KPIs {
   total_assets: number;
-  failed: number;
+  offline: number;
   critical: number;
   warning: number;
   healthy: number;

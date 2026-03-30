@@ -7,15 +7,15 @@ snowflake.configure({ logLevel: "ERROR" });
 
 let _connection: snowflake.Connection | null = null;
 
-const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || "";
-const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "";
+const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || "sfsenorthamerica-jdrew.snowflakecomputing.com";
+const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "SFSENORTHAMERICA-JDREW";
 const PAT_TOKEN = process.env.SNOWFLAKE_PAT || "";
 
 function readConnectionConfig(): Record<string, string> {
   const tomlPath = path.join(os.homedir(), ".snowflake", "connections.toml");
   if (!fs.existsSync(tomlPath)) return {};
   const raw = fs.readFileSync(tomlPath, "utf-8");
-  const connName = process.env.SNOWFLAKE_CONNECTION_NAME || "default";
+  const connName = process.env.SNOWFLAKE_CONNECTION_NAME || "jdrew";
   const lines = raw.split("\n");
   let inSection = false;
   const cfg: Record<string, string> = {};
@@ -64,12 +64,37 @@ function getConnectionConfig(): snowflake.ConnectionOptions {
     };
   }
 
-  console.log("Using PAT authentication");
-  const pat = PAT_TOKEN;
-  return {
-    ...baseConfig,
-    password: pat,
-  };
+  if (PAT_TOKEN) {
+    console.log("Using PAT authentication");
+    return {
+      ...baseConfig,
+      password: PAT_TOKEN,
+    };
+  }
+
+  const spcsTokenPath = "/snowflake/session/token";
+  try {
+    if (fs.existsSync(spcsTokenPath)) {
+      const token = fs.readFileSync(spcsTokenPath, "utf8").trim();
+      console.log("Using SPCS OAuth authentication (token found)");
+      return {
+        account: SNOWFLAKE_ACCOUNT,
+        host: SNOWFLAKE_HOST,
+        warehouse: process.env.SNOWFLAKE_WAREHOUSE || "COMPUTE_WH",
+        database: process.env.SNOWFLAKE_DATABASE || "PDM_DEMO",
+        schema: process.env.SNOWFLAKE_SCHEMA || "APP",
+        authenticator: "OAUTH",
+        token: token,
+      };
+    } else {
+      console.log("SPCS token file not found at:", spcsTokenPath);
+    }
+  } catch (e) {
+    console.log("Error reading SPCS token:", (e as Error).message);
+  }
+
+  console.log("Falling back to no auth");
+  return baseConfig;
 }
 
 function isRetryableError(err: unknown): boolean {

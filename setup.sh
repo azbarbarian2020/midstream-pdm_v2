@@ -101,7 +101,7 @@ seed_data() {
     snow stage copy "$SCRIPT_DIR/data/" @PDM_DEMO.APP.DATA_STAGE/seed/ --recursive --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
 
     echo "  Loading tables from CSV..."
-    local CSV_FORMAT="TYPE = CSV COMPRESSION = GZIP FIELD_OPTIONALLY_ENCLOSED_BY = '\"' SKIP_HEADER = 1 FIELD_DELIMITER = ',' NULL_IF = ('')"
+    local CSV_FORMAT="TYPE = CSV COMPRESSION = GZIP FIELD_OPTIONALLY_ENCLOSED_BY = '\"' SKIP_HEADER = 1 FIELD_DELIMITER = ',' NULL_IF = ('', '\\\\N', '\"\\\\N\"')"
 
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.STATIONS;"
     snow_sql -q "COPY INTO PDM_DEMO.RAW.STATIONS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_stations.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
@@ -119,8 +119,8 @@ seed_data() {
     snow_sql -q "COPY INTO PDM_DEMO.RAW.MAINTENANCE_LOGS FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_maintenance_logs.csv.gz FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
     echo "  Loading telemetry (~1M rows, this may take a minute)..."
-    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.TELEMETRY;"
-    snow_sql -q "COPY INTO PDM_DEMO.RAW.TELEMETRY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_telemetry/ FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
+    snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.RAW.PUMP_TELEMETRY;"
+    snow_sql -q "COPY INTO PDM_DEMO.RAW.PUMP_TELEMETRY FROM @PDM_DEMO.APP.DATA_STAGE/seed/raw_pump_telemetry/ FILE_FORMAT = ($CSV_FORMAT) ON_ERROR = 'ABORT_STATEMENT';"
 
     echo "  Loading analytics tables (feature store + predictions)..."
     snow_sql -q "TRUNCATE TABLE IF EXISTS PDM_DEMO.ANALYTICS.FEATURE_STORE;"
@@ -381,6 +381,10 @@ create_network_access() {
 
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE) ENABLED = TRUE;"
 
+    echo "  Creating S3 internal network rule for result streaming..."
+    snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.SNOWFLAKE_INTERNAL_S3_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('*.s3.us-west-2.amazonaws.com:443', '*.s3.amazonaws.com:443');"
+    snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_S3_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_INTERNAL_S3_RULE) ENABLED = TRUE;"
+
     echo -e "${GREEN}✓ Network access configured${NC}\n"
 }
 
@@ -438,7 +442,7 @@ for row in data:
 
     snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
 
-    snow_sql -q "CREATE SERVICE IF NOT EXISTS PDM_DEMO.APP.PDM_FRONTEND IN COMPUTE POOL PDM_DEMO_POOL FROM @PDM_DEMO.APP.SPECS SPECIFICATION_FILE = 'pdm_service.yaml' EXTERNAL_ACCESS_INTEGRATIONS = (PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS) MIN_INSTANCES = 1 MAX_INSTANCES = 1;"
+    snow_sql -q "CREATE SERVICE IF NOT EXISTS PDM_DEMO.APP.PDM_FRONTEND IN COMPUTE POOL PDM_DEMO_POOL FROM @PDM_DEMO.APP.SPECS SPECIFICATION_FILE = 'pdm_service.yaml' EXTERNAL_ACCESS_INTEGRATIONS = (PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS, PDM_S3_EXTERNAL_ACCESS) MIN_INSTANCES = 1 MAX_INSTANCES = 1;"
 
     echo "  Waiting for service to start..."
     for i in $(seq 1 40); do

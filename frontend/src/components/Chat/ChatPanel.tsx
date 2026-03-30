@@ -27,14 +27,17 @@ export function ChatPanel() {
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const autoSendRef = useRef(false);
+
   useEffect(() => {
     if (pendingMessage && isOpen) {
       setInput(pendingMessage);
+      autoSendRef.current = true;
       clearPending();
     } else if (pendingContext && isOpen) {
-      setInput(
-        `Diagnose asset ${pendingContext.asset_id}. It's predicted as ${pendingContext.predicted_class} with ${pendingContext.rul_days} days RUL. Query telemetry data and explain which sensor readings indicate this failure mode. Do NOT recommend a technician - just explain the diagnosis.`
-      );
+      const msg = `Diagnose asset ${pendingContext.asset_id}. It's predicted as ${pendingContext.predicted_class} with ${pendingContext.rul_days} days RUL. Query telemetry data and explain which sensor readings indicate this failure mode. Do NOT recommend a technician - just explain the diagnosis.`;
+      setInput(msg);
+      autoSendRef.current = true;
       clearPending();
     }
   }, [pendingMessage, pendingContext, isOpen, clearPending]);
@@ -196,6 +199,14 @@ export function ChatPanel() {
       setIsLoading(false);
     }
   }, [input, threadId, isLoading, pendingContext]);
+
+  useEffect(() => {
+    if (autoSendRef.current && input.trim() && !isLoading) {
+      autoSendRef.current = false;
+      const timer = setTimeout(() => sendMessage(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [input, isLoading, sendMessage]);
 
   if (!isOpen) {
     return (

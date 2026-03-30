@@ -39,8 +39,8 @@ const DAY_COLORS = [
 
 function DispatchContent() {
   const queryClient = useQueryClient();
-  const { asOfTimestamp, toDisplayDate, dataNow } = useTimeTravel();
-  const scheduleEnd = (() => { const d = new Date(dataNow); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10); })();
+  const { asOfTimestamp, toDisplayDate, dataNow, isLoading: timeLoading } = useTimeTravel();
+  const scheduleEnd = dataNow ? (() => { const d = new Date(dataNow); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10); })() : "";
   const { open } = useChatContext();
   const searchParams = useSearchParams();
   const assetParam = searchParams.get("asset");
@@ -568,6 +568,7 @@ function DispatchContent() {
                     NAME: t.NAME,
                     HOME_BASE_CITY: t.HOME_BASE_CITY,
                   }))}
+                  startDate={(asOfTimestamp || dataNow || "")?.slice(0, 10) || undefined}
                 />
               </div>
             )}

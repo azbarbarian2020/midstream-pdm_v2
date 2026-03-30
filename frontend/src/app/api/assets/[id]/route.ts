@@ -1,17 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/snowflake";
+import { safeToISODate, safeToISOTimestamp } from "@/lib/dates";
 
-function formatDate(val: any): string | null {
-  if (!val) return null;
-  const d = val instanceof Date ? val : new Date(val);
-  return d.toISOString().slice(0, 10);
-}
-
-function formatTs(val: any): string | null {
-  if (!val) return null;
-  const d = val instanceof Date ? val : new Date(val);
-  return d.toISOString().slice(0, 19).replace("T", " ");
-}
+const formatDate = safeToISODate;
 
 export async function GET(
   req: NextRequest,
@@ -42,32 +33,51 @@ export async function GET(
   let preds;
   if (asOfTs) {
     preds = await query(
-      `SELECT ASSET_ID, AS_OF_TS, PREDICTED_CLASS, CLASS_PROBABILITIES,
-              PREDICTED_RUL_DAYS, RISK_LEVEL, MODEL_VERSION, SCORED_AT
+      `SELECT 
+        PUMP_ID AS ASSET_ID,
+        TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS') AS AS_OF_TS,
+        PREDICTED_CLASS,
+        PREDICTED_RUL_DAYS,
+        CASE 
+          WHEN PREDICTED_CLASS = 'OFFLINE' THEN 'FAILED'
+          WHEN PREDICTED_CLASS = 'NORMAL' THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS IS NULL THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS <= 7 THEN 'CRITICAL'
+          WHEN PREDICTED_RUL_DAYS <= 14 THEN 'WARNING'
+          ELSE 'HEALTHY'
+        END AS RISK_LEVEL,
+        CONFIDENCE,
+        TOP_FEATURE AS TOP_FEATURE_1
        FROM PDM_DEMO.ANALYTICS.PREDICTIONS
-       WHERE ASSET_ID = ? AND AS_OF_TS <= ?::TIMESTAMP_NTZ
-       QUALIFY ROW_NUMBER() OVER (PARTITION BY ASSET_ID ORDER BY AS_OF_TS DESC) = 1`,
+       WHERE PUMP_ID = ? AND TS <= ?::TIMESTAMP_NTZ
+       QUALIFY ROW_NUMBER() OVER (PARTITION BY PUMP_ID ORDER BY TS DESC) = 1`,
       [assetId, asOfTs]
     );
   } else {
     preds = await query(
-      `SELECT ASSET_ID, AS_OF_TS, PREDICTED_CLASS, CLASS_PROBABILITIES,
-              PREDICTED_RUL_DAYS, RISK_LEVEL, MODEL_VERSION, SCORED_AT
+      `SELECT 
+        PUMP_ID AS ASSET_ID,
+        TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS') AS AS_OF_TS,
+        PREDICTED_CLASS,
+        PREDICTED_RUL_DAYS,
+        CASE 
+          WHEN PREDICTED_CLASS = 'OFFLINE' THEN 'FAILED'
+          WHEN PREDICTED_CLASS = 'NORMAL' THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS IS NULL THEN 'HEALTHY'
+          WHEN PREDICTED_RUL_DAYS <= 7 THEN 'CRITICAL'
+          WHEN PREDICTED_RUL_DAYS <= 14 THEN 'WARNING'
+          ELSE 'HEALTHY'
+        END AS RISK_LEVEL,
+        CONFIDENCE,
+        TOP_FEATURE AS TOP_FEATURE_1
        FROM PDM_DEMO.ANALYTICS.PREDICTIONS
-       WHERE ASSET_ID = ?
-       QUALIFY ROW_NUMBER() OVER (PARTITION BY ASSET_ID ORDER BY AS_OF_TS DESC) = 1`,
+       WHERE PUMP_ID = ?
+       QUALIFY ROW_NUMBER() OVER (PARTITION BY PUMP_ID ORDER BY TS DESC) = 1`,
       [assetId]
     );
   }
 
   const pred = preds[0] || null;
-  if (pred) {
-    pred.AS_OF_TS = formatTs(pred.AS_OF_TS);
-    pred.SCORED_AT = formatTs(pred.SCORED_AT);
-    if (pred.CLASS_PROBABILITIES && typeof pred.CLASS_PROBABILITIES === "string") {
-      pred.CLASS_PROBABILITIES = JSON.parse(pred.CLASS_PROBABILITIES);
-    }
-  }
   asset.prediction = pred;
 
   return NextResponse.json(asset);

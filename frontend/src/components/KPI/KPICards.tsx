@@ -41,7 +41,7 @@ export function KPICards({ kpis, isLoading }: KPICardsProps) {
             </span>
           </div>
           <div className="text-2xl font-bold text-[var(--foreground)]">
-            {isLoading ? "—" : c.key === "critical" ? ((kpis?.failed || 0) + (kpis?.critical || 0)) || "—" : kpis?.[c.key] ?? "—"}
+            {isLoading ? "—" : c.key === "critical" ? ((kpis?.offline || 0) + (kpis?.critical || 0)) || "—" : kpis?.[c.key] ?? "—"}
           </div>
         </div>
       ))}
