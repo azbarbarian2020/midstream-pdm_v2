@@ -148,6 +148,55 @@ Run these steps in order to deploy the demo:
 
 ---
 
+## Proving It's Real — Technical Walkthrough Artifacts
+
+The demo includes SQL worksheets and notebooks to prove every component is real (not hardcoded):
+
+### SQL Proof Worksheets (`snowflake/proof/`)
+
+| Worksheet | What It Proves |
+|-----------|---------------|
+| `01_explore_raw_data.sql` | 10 stations, 50 assets, 931K+ telemetry rows, 499 maintenance events, 8 PDF manuals on stage |
+| `02_ml_pipeline_proof.sql` | Feature Store (31 engineered features), Model Registry (versions + metrics), predictions correlate with sensor degradation |
+| `03_cortex_services_proof.sql` | Live Cortex Search over real PDFs, Semantic View, Agent with 3 tools, route planner SP |
+| `04_live_predictions.sql` | RUL counting down day-by-day, risk escalation, different failure modes for different equipment |
+
+### ML Training Notebook (`notebooks/ml_training.ipynb`)
+
+16 cells with section headers for demo walkthrough:
+1. Required Packages + Pipeline Overview
+2. Load Feature Store (real data from `ANALYTICS.FEATURE_STORE`)
+3. Engineer 31 Features (z-score severity, interaction terms, degradation intensity)
+4. SMOTE Oversampling (balances minority failure classes)
+5. Train XGBoost Classifier (multi-class failure mode, prints F1/accuracy)
+6. Train XGBoost Regressor (RUL prediction, prints MAE/R²)
+7. Register to ML Registry (versioned models with metrics)
+8. Verify Registered Models
+
+### Equipment Manuals (8 Real PDFs on Stage)
+
+| PDF | Equipment Type |
+|-----|---------------|
+| `Ariel_JGK-4_manual.pdf` | Compressor |
+| `Atlas_Copco_GA-90_manual.pdf` | Compressor |
+| `Dresser-Rand_DATUM_manual.pdf` | Compressor |
+| `Ingersoll_Rand_Centac_manual.pdf` | Compressor |
+| `Flowserve_HPRT_manual.pdf` | Pump |
+| `Grundfos_CRN_manual.pdf` | Pump |
+| `Sulzer_MSD_manual.pdf` | Pump |
+| `Sundyne_LMV-311_manual.pdf` | Pump |
+
+### Demo Walkthrough Order
+
+1. **Raw Data** — Run `snowflake/proof/01_explore_raw_data.sql` to show the foundation
+2. **ML Training** — Open `notebooks/ml_training.ipynb` in Snowsight, walk through each step
+3. **Model Proof** — Run `snowflake/proof/02_ml_pipeline_proof.sql` to show models are real
+4. **AI Stack** — Run `snowflake/proof/03_cortex_services_proof.sql` to show Search, Analyst, Agent
+5. **Live Predictions** — Run `snowflake/proof/04_live_predictions.sql` to show predictions changing over time
+6. **The App** — Open the dashboard to show what all of this powers
+
+---
+
 ## Data Flow
 
 ```mermaid
@@ -255,7 +304,7 @@ ml_training.ipynb (Snowflake Notebook, PDM_DEMO.ML.ML_TRAINING)
     ├── LogisticRegression calibrator for severity-scaled probabilities
     │
     ▼
-ML.FAILURE_CLASSIFIER (v6)   ML.RUL_REGRESSOR (v6)   ML.PROBABILITY_CALIBRATOR (v6)
+ML.FAILURE_CLASSIFIER (v7)   ML.RUL_REGRESSOR (v7)   ML.PROBABILITY_CALIBRATOR (v7)
     │                              │                         │
     └──────────────────────────────┴─────────────────────────┘
                                    │
@@ -268,9 +317,9 @@ ML.FAILURE_CLASSIFIER (v6)   ML.RUL_REGRESSOR (v6)   ML.PROBABILITY_CALIBRATOR (
 
 | Model | Version | Framework | Task | Purpose |
 |-------|---------|-----------|------|---------|
-| FAILURE_CLASSIFIER | v6 | XGBClassifier | 6-class classification | Predicts failure mode |
-| RUL_REGRESSOR | v6 | XGBRegressor | Regression | Predicts Remaining Useful Life (days) |
-| PROBABILITY_CALIBRATOR | v6 | LogisticRegression | Probability scaling | Severity-scaled class probabilities |
+| FAILURE_CLASSIFIER | v7 | XGBClassifier | 6-class classification | Predicts failure mode |
+| RUL_REGRESSOR | v7 | XGBRegressor | Regression | Predicts Remaining Useful Life (days) |
+| PROBABILITY_CALIBRATOR | v7 | LogisticRegression | Probability scaling | Severity-scaled class probabilities |
 
 ### Why Three Models?
 
@@ -449,8 +498,8 @@ DEGRADATION_INTENSITY = sqrt(clamp(VIB_SEVERITY,0)² + clamp(TEMP_SEVERITY,0)²)
 | Tool | Type | Purpose | Data Source |
 |------|------|---------|-------------|
 | fleet_analyst | cortex_analyst_text_to_sql | Quantitative queries (counts, averages, comparisons) | FLEET_SEMANTIC_VIEW -> FLEET_KPI_VIEW |
-| manual_search | cortex_search | Procedures, troubleshooting, safety info | MANUALS + MAINTENANCE_LOGS (545 docs, arctic-embed-m-v1.5) |
-| plan_route | generic (procedure) | Service route optimization | PLAN_ROUTE SP -> PREDICTIONS, TECHNICIANS, PARTS_INVENTORY |
+| manual_search | cortex_search | Procedures, troubleshooting, safety info | MANUALS (71 docs, arctic-embed-m-v1.5) |
+| plan_route | generic (procedure) | Intelligent route optimization with co-maintenance bundling | PLAN_ROUTE SP -> PREDICTIONS, TECHNICIANS, PARTS_INVENTORY |
 
 ### Agent Instructions Include
 
@@ -476,27 +525,57 @@ The ChatPanel component provides a floating assistant available on asset detail 
 
 ---
 
-## Co-Maintenance Feature
+## Intelligent Route Planner (PLAN_ROUTE)
 
-The route planner identifies **co-maintenance opportunities** — additional maintenance tasks that can be performed while a technician is already on-site for a primary work order.
+The route planner doesn't just sequence stops — it actively looks for efficiency opportunities:
+
+### Core Intelligence
+
+1. **Geographic Optimization**: Nearest-neighbor routing from technician's home base
+2. **Severity Prioritization**: FAILED → CRITICAL → WARNING ordering
+3. **Schedule Awareness**: Respects existing commitments, blocked dates (PTO, training)
+4. **Certification Matching**: Warns if tech lacks required certs
+5. **Co-Maintenance Bundling**: ALWAYS scans same-site healthy assets for preventive work
 
 ### How It Works
 
 ```
-Primary Asset (Critical/Warning)
+Primary Asset (Critical/Warning/Healthy)
     │
     ▼
-PLAN_ROUTE SP scans nearby assets
+PLAN_ROUTE SP builds route:
     │
-    ├── Same station? → Check for early degradation signals
-    ├── Sensor trends rising? → Flag for inspection
-    └── Time since last maintenance? → Recommend preventive service
+    ├── 1. Start from tech's home base
+    ├── 2. Add primary asset as first stop
+    ├── 3. Find other at-risk assets, sort by severity + proximity
+    ├── 4. At EACH visited station:
+    │       └── Scan ALL co-located HEALTHY assets for:
+    │           • Rising sensor trends (vibration, temp)
+    │           • Overdue preventive maintenance (>45 days)
+    │           • Approaching PM interval (>25 days)
+    │           • High operating hours (>100K)
+    │           • Elevated sensor thresholds
+    ├── 5. Bundle co-maintenance if time permits (35% budget)
+    └── 6. Generate reasoning for EVERY decision
     │
     ▼
-Co-maintenance recommendations returned with route
+Route with stops, parts, co-maintenance, and explanations
 ```
 
-### Co-Maintenance Data Structure
+### Co-Maintenance Triggers
+
+| Trigger | Condition | Task Generated |
+|---------|-----------|----------------|
+| `sensor_trend` | Vibration trend > 0.001/hr | "Vibration trending up — inspect bearings" |
+| `sensor_threshold` | Vibration > 4.0 mm/s | "Elevated vibration — check mounting" |
+| `maintenance_overdue` | Days since service > 45 | "Overdue PM — full service required" |
+| `maintenance_due_soon` | Days since service > 25 | "PM due soon — lubrication check" |
+| `operating_hours` | Hours > 100,000 | "High-hour inspection — wear assessment" |
+| `routine` | None of above | "Visual inspection while on-site" |
+
+Each co-maintenance task includes a `reasoning` field explaining why it was added.
+
+### Route Response Data Structure
 
 Each `RouteStop` in the route response includes:
 ```typescript
@@ -515,18 +594,58 @@ interface CoMaintenance {
 }
 ```
 
-### Example Co-Maintenance Recommendation
+### Example Route Output
 
+```json
+{
+  "route": [
+    {
+      "stop_number": 1,
+      "asset_id": 1,
+      "station": "Midland Junction",
+      "predicted_class": "BEARING_WEAR",
+      "rul_days": 12.3,
+      "risk_level": "WARNING",
+      "estimated_repair_hours": 4.0,
+      "reasoning": "Asset 1 (Flowserve HPRT) shows BEARING_WEAR failure pattern driven by vibration. Estimated 12.3 days until failure.",
+      "co_maintenance": [
+        {
+          "asset_id": 2,
+          "task": "PM due soon — Grundfos CRN at 28d, lubrication & filter check",
+          "estimated_hours": 0.75,
+          "trigger": "maintenance_due_soon",
+          "reasoning": "Approaching 30-day maintenance interval. Performing service now while on-site saves a dedicated trip."
+        },
+        {
+          "asset_id": 3,
+          "task": "Vibration trending up — Sulzer MSD at +0.0023/hr, inspect bearings",
+          "estimated_hours": 1.25,
+          "trigger": "sensor_trend",
+          "reasoning": "Vibration increasing at 0.0023/hr indicates developing bearing wear. Early intervention prevents catastrophic failure."
+        }
+      ],
+      "co_maintenance_hours": 2.0,
+      "stop_total_hours": 6.0
+    }
+  ],
+  "route_explanation": "**Primary target:** Asset 1 (Flowserve HPRT) at Midland Junction — BEARING_WEAR failure pattern detected, 12.3d RUL, WARNING priority.\n\n**Preventive bundling:** 2 co-maintenance task(s) on healthy equipment at visited stations (1 maintenance due soon, 1 sensor trend). This maximizes technician utilization and prevents future trips.",
+  "routing_decisions": [
+    {"asset_id": 1, "decision": "primary_stop", "reasoning": "..."},
+    {"asset_id": 2, "decision": "co_maintenance", "reasoning": "..."},
+    {"asset_id": 3, "decision": "co_maintenance", "reasoning": "..."}
+  ],
+  "day_summary": [{"day": 1, "utilization_pct": 96.3}]
+}
 ```
-Stop 1: Asset 27 (COMPRESSOR) — Primary repair (3.0h)
-   └── Co-maint: Asset 49 (COMPRESSOR) — Thermal Inspection (0.75h)
-       Reason: Ingersoll Rand Centac temp rising +0.0114°F/hr (24h mean 184°F)
-```
 
-### Route Summary Includes
+### Route Summary Fields
 
-- `co_maintenance_count`: Total number of co-maintenance tasks across all stops
-- Each stop shows `stop_total_hours` = primary repair hours + co-maintenance hours
+| Field | Description |
+|-------|-------------|
+| `route_explanation` | Markdown narrative explaining the routing logic |
+| `routing_decisions` | Array of decisions with reasoning for each asset |
+| `co_maintenance_count` | Total co-maintenance tasks across all stops |
+| `day_summary` | Per-day hours breakdown and utilization % |
 
 ---
 
@@ -557,9 +676,9 @@ Stop 1: Asset 27 (COMPRESSOR) — Primary repair (3.0h)
 
 | Object | Type | Versions | Purpose |
 |--------|------|----------|---------|
-| FAILURE_CLASSIFIER | Model | V2-V8 (current: v6) | XGBoost 6-class failure classification |
-| RUL_REGRESSOR | Model | V2-V8 (current: v6) | XGBoost RUL regression (trained on non-NORMAL samples) |
-| PROBABILITY_CALIBRATOR | Model | V6, V8 (current: v6) | LogisticRegression for severity-scaled class probabilities |
+| FAILURE_CLASSIFIER | Model | v7 (current) | XGBoost 6-class failure classification |
+| RUL_REGRESSOR | Model | v7 (current) | XGBoost RUL regression (trained on non-NORMAL samples) |
+| PROBABILITY_CALIBRATOR | Model | v7 (current) | LogisticRegression for severity-scaled class probabilities |
 | MODEL_METADATA | Table | - | Stores baselines (vib_mean, temp_mean, classes) and MODEL_VERSION |
 | SCORE_FLEET_SP | Stored Procedure | - | Python SP to load models from registry and score fleet |
 | ML_TRAINING | Notebook | - | Full ML training pipeline |
@@ -569,11 +688,11 @@ Stop 1: Asset 27 (COMPRESSOR) — Primary repair (3.0h)
 
 | Object | Type | Purpose |
 |--------|------|---------|
-| MANUALS | Table (46 rows) | Equipment manual sections for 8 models |
+| MANUALS | Table (71 rows) | Equipment manual sections from PARSE_DOCUMENT |
 | WORK_ORDERS | Table | Dispatch work orders with tech assignment |
 | TECH_SCHEDULES | Table | Technician schedule blocks |
 | FLEET_SEMANTIC_VIEW | Semantic View | Cortex Analyst text-to-SQL interface |
-| MANUAL_SEARCH | Cortex Search Service | RAG over manuals + maintenance logs (545 docs, arctic-embed-m-v1.5) |
+| MANUAL_SEARCH | Cortex Search Service | RAG over manuals (71 docs, arctic-embed-m-v1.5) |
 | PDM_AGENT | Cortex Agent | AI assistant with 3 tools (claude-4-sonnet) |
 | PLAN_ROUTE | Stored Procedure | Python SP for route optimization (Haversine distance) |
 | DATA_STAGE | Stage (internal) | Application data files |
