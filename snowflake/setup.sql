@@ -116,7 +116,12 @@ CREATE OR REPLACE TABLE RAW.TECHNICIANS (
     HOME_BASE_LON       FLOAT,
     HOME_BASE_CITY      VARCHAR(100),
     CERTIFICATIONS      VARIANT,
-    AVAILABILITY        VARCHAR(20) DEFAULT 'AVAILABLE'
+    AVAILABILITY        VARCHAR(20) DEFAULT 'AVAILABLE',
+    YEARS_EXPERIENCE    INT,
+    SPECIALTY_NOTES     VARCHAR(500),
+    BIO                 VARCHAR(2000),
+    PHOTO_URL           VARCHAR(1000),
+    HOURLY_RATE         FLOAT
 );
 
 -- ----------------------------------------------------------------------------
@@ -167,6 +172,15 @@ CREATE OR REPLACE TABLE ANALYTICS.DATA_NOW_TS (
 INSERT INTO ANALYTICS.DATA_NOW_TS (NOW_TS) VALUES ('2026-03-17 23:55:00'::TIMESTAMP_NTZ);
 
 -- ----------------------------------------------------------------------------
+-- 4b. ML Tables
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE ML.MODEL_METADATA (
+    KEY         VARCHAR(100) PRIMARY KEY,
+    VALUE       VARCHAR(16000),
+    UPDATED_AT  TIMESTAMP_NTZ
+);
+
+-- ----------------------------------------------------------------------------
 -- 5. APP Tables
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE APP.MANUALS (
@@ -187,7 +201,10 @@ CREATE OR REPLACE TABLE APP.WORK_ORDERS (
     DESCRIPTION     VARCHAR(2000),
     PARTS_NEEDED    VARIANT,
     STATUS          VARCHAR(20) DEFAULT 'OPEN',
-    CREATED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+    CREATED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    SCHEDULED_DATE  DATE,
+    ESTIMATED_HOURS FLOAT,
+    STATION_NAME    VARCHAR(200)
 );
 
 CREATE OR REPLACE TABLE APP.TECH_SCHEDULES (
@@ -267,6 +284,10 @@ CREATE STAGE IF NOT EXISTS APP.MODELS
     ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
 
 CREATE STAGE IF NOT EXISTS APP.DATA_STAGE
+    DIRECTORY = (ENABLE = TRUE)
+    ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
+
+CREATE STAGE IF NOT EXISTS APP.SPECS
     DIRECTORY = (ENABLE = TRUE)
     ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
 
