@@ -277,6 +277,35 @@ LEFT JOIN latest_predictions p ON a.ASSET_ID = p.ASSET_ID
 LEFT JOIN latest_maintenance m ON a.ASSET_ID = m.ASSET_ID;
 
 -- ----------------------------------------------------------------------------
+-- 6b. PREDICTION_HISTORY View (used by frontend time-anchor and trends)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW ANALYTICS.PREDICTION_HISTORY AS
+SELECT 
+    PUMP_ID AS ASSET_ID,
+    TS AS PREDICTION_TS,
+    TS::DATE AS PREDICTION_DATE,
+    PREDICTED_CLASS,
+    PREDICTED_RUL_DAYS AS RUL_DAYS,
+    CASE 
+        WHEN PREDICTED_CLASS = 'OFFLINE' THEN 'FAILED'
+        WHEN PREDICTED_CLASS = 'NORMAL' THEN 'HEALTHY'
+        WHEN PREDICTED_RUL_DAYS IS NULL THEN 'HEALTHY'
+        WHEN PREDICTED_RUL_DAYS <= 7 THEN 'CRITICAL'
+        WHEN PREDICTED_RUL_DAYS <= 14 THEN 'WARNING'
+        ELSE 'HEALTHY'
+    END AS RISK_LEVEL,
+    CONFIDENCE,
+    'V5' AS MODEL_VERSION,
+    CURRENT_TIMESTAMP() AS SCORED_AT,
+    TOP_FEATURE AS TOP_FEATURE_1,
+    0 AS TOP_FEATURE_1_DELTA_PCT,
+    NULL AS TOP_FEATURE_2,
+    NULL AS TOP_FEATURE_2_DELTA_PCT,
+    NULL AS TOP_FEATURE_3,
+    NULL AS TOP_FEATURE_3_DELTA_PCT
+FROM ANALYTICS.PREDICTIONS;
+
+-- ----------------------------------------------------------------------------
 -- 7. Stage for semantic model and manuals
 -- ----------------------------------------------------------------------------
 CREATE STAGE IF NOT EXISTS APP.MODELS
