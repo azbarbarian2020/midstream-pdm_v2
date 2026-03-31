@@ -150,11 +150,11 @@ Use the time slider to rewind to March 6 — everything was healthy. Fast-forwar
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| DATA_NOW_TS | 2026-03-13T00:00:00 | Demo "current" timestamp |
+| DATA_NOW_TS | 2026-03-17T23:55:00 | Demo "current" timestamp |
 | PDM_DEMO_WH | MEDIUM | Warehouse size |
 | PDM_DEMO_POOL | CPU_X64_XS | Compute pool instance |
 
-The demo data is frozen at 2026-03-13. The Time Travel slider simulates different points in time by filtering predictions and telemetry to the selected timestamp.
+The demo data is frozen at 2026-03-17. The Time Travel slider simulates different points in time by filtering predictions and telemetry to the selected timestamp.
 
 ## Key Files
 
@@ -197,6 +197,163 @@ To clear scheduled work orders and reset the dispatch state:
 ```sql
 CALL PDM_DEMO.APP.RESET_DEMO();
 ```
+
+## Proving the ML and AI is Real
+
+This section provides SQL queries and techniques to demonstrate that the demo uses real machine learning models and AI, not pre-computed static results.
+
+### 1. View Registered ML Models in Snowflake
+
+```sql
+-- Show all registered models in the ML schema
+SHOW MODELS IN SCHEMA PDM_DEMO.ML;
+
+-- Inspect a specific model's versions and metadata
+SHOW VERSIONS IN MODEL PDM_DEMO.ML.FAILURE_CLASSIFIER;
+SHOW VERSIONS IN MODEL PDM_DEMO.ML.RUL_REGRESSOR;
+
+-- View model training metadata (accuracy, features used)
+SELECT * FROM PDM_DEMO.ML.MODEL_METADATA;
+```
+
+**What you'll see**: XGBoost classifier and regressor models with version history, training timestamps, and accuracy metrics.
+
+### 2. Run Real-Time Inference with the Model
+
+```sql
+-- Call the model directly on feature data
+-- This proves the model is a real callable artifact, not pre-computed
+WITH sample_features AS (
+    SELECT * FROM PDM_DEMO.ANALYTICS.FEATURE_STORE
+    WHERE ASSET_ID = 27 AND AS_OF_TS = (SELECT MAX(AS_OF_TS) FROM PDM_DEMO.ANALYTICS.FEATURE_STORE WHERE ASSET_ID = 27)
+)
+SELECT 
+    ASSET_ID,
+    AS_OF_TS,
+    PDM_DEMO.ML.FAILURE_CLASSIFIER!PREDICT(
+        VIBRATION_MEAN_24H, VIBRATION_STD_24H, VIBRATION_MAX_24H, VIBRATION_TREND,
+        TEMPERATURE_MEAN_24H, TEMPERATURE_STD_24H, TEMPERATURE_MAX_24H, TEMPERATURE_TREND,
+        PRESSURE_MEAN_24H, PRESSURE_STD_24H, DIFF_PRESSURE_MEAN_24H,
+        FLOW_RATE_MEAN_24H, RPM_MEAN_24H, POWER_DRAW_MEAN_24H,
+        DAYS_SINCE_MAINTENANCE, MAINTENANCE_COUNT_90D, OPERATING_HOURS
+    ) AS PREDICTED_CLASS
+FROM sample_features;
+```
+
+### 3. Examine the Training Notebooks
+
+The `notebooks/` directory contains Jupyter notebooks you can open in Snowsight:
+
+| Notebook | Purpose | Key Proof Points |
+|----------|---------|------------------|
+| `pump_training_pipeline.ipynb` | Generates synthetic training data, trains XGBoost models | See confusion matrix, feature importance, accuracy scores |
+| `pump_inference_pipeline.ipynb` | Scores fleet with trained models | Shows real model.predict() calls |
+
+**To upload and run in Snowsight**:
+```bash
+snow notebook create pump_training_demo --database PDM_DEMO --schema ML --from notebooks/pump_training_pipeline.ipynb
+```
+
+### 4. Verify Cortex Agent is Calling Tools
+
+The AI assistant uses Cortex Agent with real tool orchestration. To prove it:
+
+1. **Ask a question** in the chat: "What's wrong with asset 27?"
+2. **Check the response** — it will mention:
+   - Tool calls to `fleet_analyst` (Cortex Analyst → semantic model → SQL)
+   - Tool calls to `manual_search` (Cortex Search → vector embeddings → RAG retrieval)
+   - Tool calls to `plan_route` (Python stored procedure → route optimization)
+
+```sql
+-- View the agent definition
+DESCRIBE CORTEX AGENT PDM_DEMO.APP.PDM_AGENT;
+
+-- See the tools configured
+SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+```
+
+### 5. Prove Cortex Analyst Uses Semantic Model
+
+```sql
+-- View the semantic model definition
+SELECT GET_DDL('VIEW', 'PDM_DEMO.APP.FLEET_SEMANTIC_VIEW');
+
+-- Query the semantic view directly
+SELECT * FROM PDM_DEMO.APP.FLEET_SEMANTIC_VIEW LIMIT 5;
+
+-- See what Cortex Analyst generates from natural language
+-- (Via API or UI chat panel)
+```
+
+### 6. Prove Cortex Search Uses Vector Embeddings
+
+```sql
+-- View the search service definition
+DESCRIBE CORTEX SEARCH SERVICE PDM_DEMO.APP.MANUAL_SEARCH;
+
+-- Search for content (real embedding similarity)
+SELECT *
+FROM PDM_DEMO.APP.MANUAL_SEARCH
+WHERE SEARCH('bearing replacement procedure')
+LIMIT 5;
+```
+
+### 7. View Feature Engineering Pipeline
+
+```sql
+-- Show how features are computed from raw telemetry
+SELECT 
+    ASSET_ID,
+    AS_OF_TS,
+    VIBRATION_MEAN_24H,
+    VIBRATION_TREND,
+    TEMPERATURE_MEAN_24H,
+    DAYS_SINCE_MAINTENANCE
+FROM PDM_DEMO.ANALYTICS.FEATURE_STORE
+WHERE ASSET_ID = 27
+ORDER BY AS_OF_TS DESC
+LIMIT 10;
+
+-- Compare raw telemetry to aggregated features
+SELECT 
+    ASSET_ID,
+    DATE_TRUNC('day', TS) AS DAY,
+    AVG(VIBRATION) AS VIBRATION_AVG,
+    STDDEV(VIBRATION) AS VIBRATION_STD
+FROM PDM_DEMO.RAW.TELEMETRY
+WHERE ASSET_ID = 27
+GROUP BY 1, 2
+ORDER BY DAY DESC
+LIMIT 10;
+```
+
+### 8. Watch Predictions Change Over Time
+
+```sql
+-- This proves predictions are time-series based, not static
+SELECT 
+    ASSET_ID,
+    TS AS PREDICTION_TS,
+    PREDICTED_CLASS,
+    PREDICTED_RUL_DAYS,
+    CONFIDENCE
+FROM PDM_DEMO.ANALYTICS.PREDICTIONS
+WHERE ASSET_ID = 27
+ORDER BY TS DESC
+LIMIT 20;
+```
+
+The RUL (Remaining Useful Life) decreases over time as the asset degrades — this is the ML model detecting the failure progression.
+
+### Summary: What Makes This Real ML/AI
+
+| Component | Technology | Proof |
+|-----------|------------|-------|
+| Failure Classification | XGBoost via Snowflake Model Registry | `SHOW MODELS` + callable inference |
+| RUL Prediction | XGBoost Regressor | Same — see RUL values decrease over time |
+| Natural Language Analytics | Cortex Analyst + Semantic View | Ask any fleet question in chat |
+| Document Search | Cortex Search (arctic-embed-m-v1.5) | Vector similarity returns relevant manual sections |
+| AI Orchestration | Cortex Agent (claude-4-sonnet) | Multi-tool responses with reasoning |
 
 ## Troubleshooting
 
