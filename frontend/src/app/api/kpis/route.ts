@@ -7,7 +7,7 @@ export async function GET(req: NextRequest) {
   const nowTs = await query<{ NOW_TS: string }>(
     `SELECT TO_CHAR(NOW_TS, 'YYYY-MM-DD"T"HH24:MI:SS') AS NOW_TS FROM PDM_DEMO.ANALYTICS.DATA_NOW_TS`
   );
-  const effectiveTs = asOfTs || nowTs[0]?.NOW_TS || '2026-03-17T23:55:00';
+  const effectiveTs = asOfTs || nowTs[0]?.NOW_TS || '2026-03-18T00:00:00';
 
   const preds = await query<{ ASSET_ID: number; PREDICTED_CLASS: string; PREDICTED_RUL_DAYS: number | null; RISK_LEVEL: string }>(
     `SELECT 

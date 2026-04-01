@@ -5,10 +5,7 @@ description: >
   history, and sensor telemetry across pump and compressor assets in the Permian Basin.
 
 custom_instructions:
-  sql_generation: >
-    Always filter telemetry data to TS <= '2026-03-18 00:00:00' unless the user 
-    specifies a different date range. This ensures the demo shows data as of the 
-    simulated "now" date.
+  sql_generation: Always filter telemetry data to TS <= '2026-03-18 00:00:00' unless the user specifies a different date range. This ensures the demo shows data as of the simulated now date.
 
 tables:
   - name: FLEET_KPI_VIEW

@@ -15,11 +15,7 @@ interface TimeTravelState {
 }
 
 function getInitialDate(): string {
-  try {
-    return new Date().toISOString().slice(0, 10) + "T00:00:00";
-  } catch {
-    return "2026-03-26T00:00:00";
-  }
+  return "2026-03-18T00:00:00";
 }
 
 const TimeTravelContext = createContext<TimeTravelState>({

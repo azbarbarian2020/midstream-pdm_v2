@@ -482,7 +482,7 @@ for row in data:
     echo -e "  Service User: ${SNOWFLAKE_USER}"
     echo -e "  Pool:         PDM_DEMO_POOL"
     echo ""
-    echo "  Demo date is frozen at 2026-03-13. Use the Time Travel"
+    echo "  Demo date is frozen at 2026-03-18. Use the Time Travel"
     echo "  slider in the app to simulate past and future states."
     echo ""
     echo -e "${YELLOW}  NOTE: Predictions are pre-loaded from static export.${NC}"
