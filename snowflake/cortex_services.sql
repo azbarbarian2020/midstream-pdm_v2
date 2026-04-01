@@ -48,8 +48,7 @@ CREATE OR REPLACE CORTEX SEARCH SERVICE APP.MANUAL_SEARCH
 
 -- ----------------------------------------------------------------------------
 -- 3. Semantic View
--- Created by setup.sh using SYSTEM$CREATE_SEMANTIC_VIEW_FROM_YAML()
--- Grant is issued by setup.sh after the view is created.
+-- Created by setup.sh using snowflake/create_semantic_view.sql
 -- ----------------------------------------------------------------------------
 GRANT USAGE ON CORTEX SEARCH SERVICE PDM_DEMO.APP.MANUAL_SEARCH TO ROLE DEMO_PDM_ADMIN;
 
