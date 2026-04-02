@@ -197,7 +197,7 @@ create_agent() {
 }
 
 # -------------------------------------------------------------------------
-# Step 6: Secrets (PAT + Key-pair) with SAFE KEY MANAGEMENT
+# Step 6: Secrets (Key-pair only - no PAT required)
 # -------------------------------------------------------------------------
 generate_new_key() {
     echo ""
@@ -234,36 +234,16 @@ generate_key_slot_2() {
 }
 
 create_secrets() {
-    echo -e "${BOLD}[6/10] Setting up authentication...${NC}"
+    echo -e "${BOLD}[6/10] Setting up authentication (Key-Pair only)...${NC}"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  AUTHENTICATION SETUP${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  ${YELLOW}IMPORTANT: Cortex Agent REST APIs require a PAT from a regular${NC}"
-    echo -e "  ${YELLOW}user account (not a TYPE=SERVICE user). We'll use your current${NC}"
-    echo -e "  ${YELLOW}user: ${SNOWFLAKE_USER}${NC}"
+    echo -e "  This demo uses Key-Pair JWT authentication for both SQL"
+    echo -e "  connections and Cortex REST API calls. No PAT is required."
+    echo -e "  An RSA key pair will be generated for user: ${CYAN}${SNOWFLAKE_USER}${NC}"
     echo ""
-    echo "  You need to generate a PAT (Programmatic Access Token) for this user."
-    echo ""
-    echo -e "${YELLOW}  Steps to generate PAT for ${SNOWFLAKE_USER}:${NC}"
-    echo "    1. Open Snowsight as ACCOUNTADMIN"
-    echo "    2. Go to Admin > Users & Roles > ${SNOWFLAKE_USER}"
-    echo "    3. Under Authentication > Programmatic Access Tokens > Generate"
-    echo "    4. Select role ACCOUNTADMIN (or DEMO_PDM_ADMIN), copy the token"
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo ""
-
-    read -sp "Enter PAT (Programmatic Access Token) for ${SNOWFLAKE_USER}: " PAT_VALUE
-    echo ""
-    if [ -z "$PAT_VALUE" ]; then
-        echo -e "${RED}PAT is required.${NC}"
-        exit 1
-    fi
-
-    snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PAT_VALUE}';"
-    echo -e "  ${GREEN}✓ PAT secret created${NC}"
 
     # SAFE KEY MANAGEMENT: Check for existing RSA key
     echo ""
@@ -345,7 +325,6 @@ except: pass
         generate_new_key
     fi
 
-    snow_sql -q "GRANT READ ON SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET TO ROLE DEMO_PDM_ADMIN;"
     snow_sql -q "GRANT READ ON SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TO ROLE DEMO_PDM_ADMIN;"
 
     echo -e "${GREEN}✓ Secrets configured${NC}\n"
@@ -367,10 +346,10 @@ create_network_access() {
         echo "  S3 stage host: $S3_HOST"
         snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('${S3_HOST}:443');"
 
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET) ENABLED = TRUE;"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE) ENABLED = TRUE;"
     else
         echo -e "  ${YELLOW}Could not detect S3 stage host; creating EAI without S3 rule${NC}"
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET) ENABLED = TRUE;"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE) ENABLED = TRUE;"
     fi
 
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE) ENABLED = TRUE;"
@@ -509,7 +488,7 @@ main() {
     regrant_table_privileges # Step 3b: Re-grant
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
-    create_secrets           # Step 6: PAT + key-pair (SAFE key management)
+    create_secrets           # Step 6: Key-pair auth (no PAT required)
     create_network_access    # Step 7: Network rules + EAI
     build_and_push           # Step 8: Docker build + push
     deploy_service           # Step 9: SPCS service

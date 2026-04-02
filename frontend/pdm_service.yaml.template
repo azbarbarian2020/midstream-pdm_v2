@@ -14,10 +14,6 @@ spec:
             objectName: PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
           secretKeyRef: secret_string
           envVarName: SNOWFLAKE_PRIVATE_KEY
-        - snowflakeSecret:
-            objectName: PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
-          secretKeyRef: secret_string
-          envVarName: SNOWFLAKE_PAT
       readinessProbe:
         port: 8080
         path: /api/health
