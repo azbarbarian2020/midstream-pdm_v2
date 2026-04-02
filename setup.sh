@@ -79,14 +79,8 @@ setup_connection() {
 }
 
 snow_sql() {
-    if [ -n "${SNOW_WH:-}" ]; then
-        snow sql --connection "$CONNECTION_NAME" --warehouse "$SNOW_WH" "$@"
-    else
-        snow sql --connection "$CONNECTION_NAME" "$@"
-    fi
+    snow sql --connection "$CONNECTION_NAME" "$@"
 }
-
-SNOW_WH=""
 
 # -------------------------------------------------------------------------
 # Step 1: Infrastructure (DDL)
@@ -94,7 +88,6 @@ SNOW_WH=""
 create_infrastructure() {
     echo -e "${BOLD}[1/10] Creating database, schemas, tables, and stages...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/setup.sql"
-    SNOW_WH="PDM_DEMO_WH"
     echo -e "${GREEN}✓ Infrastructure created${NC}\n"
 }
 
@@ -204,14 +197,12 @@ create_agent() {
 }
 
 # -------------------------------------------------------------------------
-# Step 6: Secrets (Key-pair only - no PAT required)
+# Step 6: Key-pair authentication with SAFE KEY MANAGEMENT
 # -------------------------------------------------------------------------
 generate_new_key() {
     echo ""
     echo "  Generating RSA key pair..."
     TEMP_DIR=$(mktemp -d)
-    KEY_DIR="$HOME/.snowflake/keys"
-    mkdir -p "$KEY_DIR"
     openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
     openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
     PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
@@ -222,15 +213,6 @@ generate_new_key() {
     PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
     snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
     echo -e "  ${GREEN}✓ Private key secret created${NC}"
-
-    CONN_LOWER=$(echo "$CONNECTION_NAME" | tr '[:upper:]' '[:lower:]')
-    cp "$TEMP_DIR/key.p8" "$KEY_DIR/${CONN_LOWER}.p8"
-    chmod 600 "$KEY_DIR/${CONN_LOWER}.p8"
-    echo -e "  ${GREEN}✓ Private key saved to ${KEY_DIR}/${CONN_LOWER}.p8${NC}"
-    echo -e "  ${YELLOW}TIP: Update your connections.toml to use key-pair auth:${NC}"
-    echo -e "    authenticator = \"SNOWFLAKE_JWT\""
-    echo -e "    private_key_file = \"~/.snowflake/keys/${CONN_LOWER}.p8\""
-
     rm -rf "$TEMP_DIR"
 }
 
@@ -252,20 +234,17 @@ generate_key_slot_2() {
 }
 
 create_secrets() {
-    echo -e "${BOLD}[6/10] Setting up authentication (Key-Pair only)...${NC}"
+    echo -e "${BOLD}[6/10] Setting up key-pair authentication...${NC}"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  AUTHENTICATION SETUP${NC}"
+    echo -e "${CYAN}  KEY-PAIR AUTHENTICATION SETUP${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  This demo uses Key-Pair JWT authentication for both SQL"
-    echo -e "  connections and Cortex REST API calls. No PAT is required."
-    echo -e "  An RSA key pair will be generated for user: ${CYAN}${SNOWFLAKE_USER}${NC}"
+    echo "  The SPCS app uses RSA key-pair JWT for both SQL connections"
+    echo "  and Cortex Agent REST API calls. No PAT required."
     echo ""
 
-    # SAFE KEY MANAGEMENT: Check for existing RSA key
-    echo ""
-    echo "  Checking for existing RSA key..."
+    echo "  Checking for existing RSA key on ${SNOWFLAKE_USER}..."
     EXISTING_KEY=$(snow_sql -q "DESCRIBE USER ${SNOWFLAKE_USER};" --format json 2>/dev/null | python3 -c "
 import sys, json
 try:
@@ -280,94 +259,71 @@ except: pass
 " 2>/dev/null || echo "")
 
     if [ "$EXISTING_KEY" = "EXISTS" ]; then
-        CLI_KEY_FILE=$(python3 -c "
-import os, configparser
-p = os.path.expanduser('~/.snowflake/connections.toml')
-if not os.path.exists(p): exit()
-c = configparser.ConfigParser()
-c.read(p)
-s = '${CONNECTION_NAME}'
-if c.has_section(s) and c.has_option(s, 'private_key_file'):
-    f = c.get(s, 'private_key_file').strip('\"').strip(\"'\")
-    f = os.path.expanduser(f)
-    if os.path.exists(f): print(f)
-" 2>/dev/null || echo "")
+        echo ""
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "  Another SPCS application may be using this key."
+        echo "  Overwriting it will break that application's authentication."
+        echo ""
+        echo "  Options:"
+        echo "    1) Reuse existing key (requires private key file or existing secret)"
+        echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
+        echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
+        echo ""
+        read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
+        KEY_CHOICE=${KEY_CHOICE:-2}
 
-        if [ -n "$CLI_KEY_FILE" ]; then
-            echo ""
-            echo -e "  ${GREEN}Detected CLI private key: ${CLI_KEY_FILE}${NC}"
-            echo "  Reusing this key for SPCS (same key pair as your CLI connection)."
-            PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$CLI_KEY_FILE")
-            snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
-            echo -e "  ${GREEN}✓ Private key secret created from CLI key${NC}"
-        else
-            echo ""
-            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-            echo -e "${YELLOW}  ⚠️  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
-            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-            echo ""
-            echo "  Another SPCS application may be using this key."
-            echo "  Overwriting it will break that application's authentication."
-            echo ""
-            echo "  Options:"
-            echo "    1) Reuse existing key (requires private key file or existing secret)"
-            echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
-            echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
-            echo ""
-            read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
-            KEY_CHOICE=${KEY_CHOICE:-2}
+        case $KEY_CHOICE in
+            1)
+                echo ""
+                echo "  Checking for existing private key secret..."
+                SECRET_EXISTS=$(snow_sql -q "SHOW SECRETS LIKE 'SNOWFLAKE_PRIVATE_KEY_SECRET' IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d else 'no')" 2>/dev/null || echo "no")
 
-            case $KEY_CHOICE in
-                1)
+                if [ "$SECRET_EXISTS" = "yes" ]; then
+                    echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
+                else
+                    echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
+                    echo "  You need to provide the private key that matches the existing public key."
                     echo ""
-                    echo "  Checking for existing private key secret..."
-                    SECRET_EXISTS=$(snow_sql -q "SHOW SECRETS LIKE 'SNOWFLAKE_PRIVATE_KEY_SECRET' IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d else 'no')" 2>/dev/null || echo "no")
-
-                    if [ "$SECRET_EXISTS" = "yes" ]; then
-                        echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
+                    read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
+                    if [ -f "$PRIVATE_KEY_PATH" ]; then
+                        PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
+                        snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+                        echo -e "  ${GREEN}✓ Private key secret created${NC}"
                     else
-                        echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
-                        echo "  You need to provide the private key that matches the existing public key."
-                        echo ""
-                        read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
-                        if [ -f "$PRIVATE_KEY_PATH" ]; then
-                            PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
-                            snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
-                            echo -e "  ${GREEN}✓ Private key secret created${NC}"
-                        else
-                            echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
-                            echo -e "  ${RED}Cannot continue without private key.${NC}"
-                            exit 1
-                        fi
-                    fi
-                    ;;
-                2)
-                    generate_key_slot_2
-                    ;;
-                3)
-                    echo ""
-                    echo -e "  ${RED}WARNING: This will invalidate any other SPCS apps using this user!${NC}"
-                    read -p "  Are you sure? (yes/no): " CONFIRM
-                    if [ "$CONFIRM" != "yes" ]; then
-                        echo "  Aborted."
+                        echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
+                        echo -e "  ${RED}Cannot continue without private key.${NC}"
                         exit 1
                     fi
-                    generate_new_key
-                    ;;
-                *)
-                    echo -e "  ${YELLOW}Invalid choice, using RSA_PUBLIC_KEY_2 (default)${NC}"
-                    generate_key_slot_2
-                    ;;
-            esac
-        fi
+                fi
+                ;;
+            2)
+                generate_key_slot_2
+                ;;
+            3)
+                echo ""
+                echo -e "  ${RED}WARNING: This will invalidate any other SPCS apps using this user!${NC}"
+                read -p "  Are you sure? (yes/no): " CONFIRM
+                if [ "$CONFIRM" != "yes" ]; then
+                    echo "  Aborted."
+                    exit 1
+                fi
+                generate_new_key
+                ;;
+            *)
+                echo -e "  ${YELLOW}Invalid choice, using RSA_PUBLIC_KEY_2 (default)${NC}"
+                generate_key_slot_2
+                ;;
+        esac
     else
-        # No existing key - safe to generate
         generate_new_key
     fi
 
     snow_sql -q "GRANT READ ON SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TO ROLE DEMO_PDM_ADMIN;"
 
-    echo -e "${GREEN}✓ Secrets configured${NC}\n"
+    echo -e "${GREEN}✓ Key-pair authentication configured${NC}\n"
 }
 
 # -------------------------------------------------------------------------
@@ -386,10 +342,10 @@ create_network_access() {
         echo "  S3 stage host: $S3_HOST"
         snow_sql -q "CREATE OR REPLACE NETWORK RULE PDM_DEMO.APP.S3_RESULT_RULE TYPE = HOST_PORT MODE = EGRESS VALUE_LIST = ('${S3_HOST}:443');"
 
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE) ENABLED = TRUE;"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE, PDM_DEMO.APP.S3_RESULT_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET) ENABLED = TRUE;"
     else
         echo -e "  ${YELLOW}Could not detect S3 stage host; creating EAI without S3 rule${NC}"
-        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE) ENABLED = TRUE;"
+        snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_CORTEX_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_API_RULE) ALLOWED_AUTHENTICATION_SECRETS = (PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET) ENABLED = TRUE;"
     fi
 
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_DEMO_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.OSM_TILES_RULE) ENABLED = TRUE;"
@@ -399,6 +355,120 @@ create_network_access() {
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION PDM_S3_EXTERNAL_ACCESS ALLOWED_NETWORK_RULES = (PDM_DEMO.APP.SNOWFLAKE_INTERNAL_S3_RULE) ENABLED = TRUE;"
 
     echo -e "${GREEN}✓ Network access configured${NC}\n"
+}
+
+# -------------------------------------------------------------------------
+# Step 7b: Account network policy - ensure SPCS service IP is allowed
+# -------------------------------------------------------------------------
+ensure_network_policy_access() {
+    echo -e "${BOLD}[7b/10] Ensuring SPCS service IP is allowed through account network policy...${NC}"
+
+    SPCS_CIDR="153.45.59.0/24"
+
+    CURRENT_POLICY=$(snow_sql -q "SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT;" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if data:
+        print(data[0].get('value', ''))
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    if [ -z "$CURRENT_POLICY" ]; then
+        echo "  No account-level network policy set. SPCS access should work."
+        echo -e "${GREEN}✓ No network policy blocking${NC}\n"
+        return
+    fi
+
+    echo "  Account network policy: $CURRENT_POLICY"
+
+    IP_LIST=$(snow_sql -q "DESC NETWORK POLICY ${CURRENT_POLICY};" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for row in data:
+        if row.get('name') == 'ALLOWED_IP_LIST':
+            print(row.get('value', ''))
+            break
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    if echo "$IP_LIST" | grep -q "$SPCS_CIDR"; then
+        echo "  SPCS CIDR $SPCS_CIDR already in account policy allow-list."
+        echo -e "${GREEN}✓ SPCS IP already allowed${NC}\n"
+        return
+    fi
+
+    echo ""
+    echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  ACCOUNT NETWORK POLICY - SPCS ACCESS${NC}"
+    echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo "  The account network policy '$CURRENT_POLICY' does not include"
+    echo "  the SPCS service CIDR ($SPCS_CIDR)."
+    echo ""
+    echo "  Without this, the SPCS container cannot call Snowflake APIs"
+    echo "  (Cortex Agent, SQL, etc.)."
+    echo ""
+    echo -e "${CYAN}  This script will create a user-level network policy for${NC}"
+    echo -e "${CYAN}  ${SNOWFLAKE_USER} that allows SPCS egress IPs. This is safe${NC}"
+    echo -e "${CYAN}  because it only affects this user and won't be wiped by${NC}"
+    echo -e "${CYAN}  account-level security tasks.${NC}"
+    echo ""
+    echo "  Options:"
+    echo "    1) Create user-level network policy (recommended - survives security tasks)"
+    echo "    2) Add SPCS CIDR to account policy directly (may be wiped by security tasks)"
+    echo "    3) Skip (I'll handle this manually)"
+    echo ""
+    read -p "  Choice [1/2/3] (default 1): " NP_CHOICE
+    NP_CHOICE=\${NP_CHOICE:-1}
+
+    case \$NP_CHOICE in
+        1)
+            echo "  Creating user-level network policy for ${SNOWFLAKE_USER}..."
+
+            COMBINED_IPS=$(python3 -c "
+ip_list = '''$IP_LIST'''
+spcs = '$SPCS_CIDR'
+ips = [ip.strip().strip(\"'\") for ip in ip_list.split(',') if ip.strip()]
+if spcs not in ips:
+    ips.append(spcs)
+print(','.join([f\"'{ip}'\" for ip in ips]))
+")
+
+            snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_DEMO.APP.PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: includes VPN IPs + SPCS CIDR - managed by setup.sh';"
+
+            snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET NETWORK_POLICY = PDM_DEMO.APP.PDM_USER_NETWORK_POLICY;"
+            echo -e "  ${GREEN}✓ User-level network policy created and assigned${NC}"
+            echo -e "  ${CYAN}  Policy: PDM_USER_NETWORK_POLICY${NC}"
+            echo -e "  ${CYAN}  Includes all VPN IPs from account policy + SPCS CIDR${NC}"
+            echo -e "  ${CYAN}  User '${SNOWFLAKE_USER}' has RSA key auth → security task won't disable them${NC}"
+            ;;
+        2)
+            echo "  Adding $SPCS_CIDR to account policy..."
+            if [ -n "$IP_LIST" ]; then
+                NEW_IP_LIST="$IP_LIST,$SPCS_CIDR"
+            else
+                NEW_IP_LIST="$SPCS_CIDR"
+            fi
+            FORMATTED_IPS=$(echo "$NEW_IP_LIST" | python3 -c "
+import sys
+ips = sys.stdin.read().strip().split(',')
+formatted = ','.join([f\"'{ip.strip()}'\" for ip in ips if ip.strip()])
+print(formatted)
+")
+            snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($FORMATTED_IPS);"
+            echo -e "  ${GREEN}✓ SPCS CIDR added to account policy${NC}"
+            echo -e "  ${YELLOW}  WARNING: Account-level security tasks may overwrite this every 12 hours.${NC}"
+            echo -e "  ${YELLOW}  Consider option 1 (user-level policy) for a permanent solution.${NC}"
+            ;;
+        3)
+            echo -e "  ${YELLOW}Skipped. You must ensure SPCS IP $SPCS_CIDR is allowed manually.${NC}"
+            ;;
+    esac
+    echo -e "${GREEN}✓ Network policy access configured${NC}\n"
 }
 
 # -------------------------------------------------------------------------
@@ -528,8 +598,9 @@ main() {
     regrant_table_privileges # Step 3b: Re-grant
     create_cortex_services   # Step 4: Cortex Search + Semantic View
     create_agent             # Step 5: Route planner + Agent
-    create_secrets           # Step 6: Key-pair auth (no PAT required)
+    create_secrets           # Step 6: Key-pair auth (SAFE key management)
     create_network_access    # Step 7: Network rules + EAI
+    ensure_network_policy_access # Step 7b: Account/user network policy for SPCS IP
     build_and_push           # Step 8: Docker build + push
     deploy_service           # Step 9: SPCS service
     show_results             # Step 10: Show endpoint

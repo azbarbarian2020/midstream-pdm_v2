@@ -1,6 +1,6 @@
 import snowflake from "snowflake-sdk";
-import crypto from "crypto";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -9,53 +9,20 @@ snowflake.configure({ logLevel: "ERROR" });
 
 let _connection: snowflake.Connection | null = null;
 
-const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || "";
-const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "";
-const PAT_TOKEN = process.env.SNOWFLAKE_PAT || "";
+const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || "sfsenorthamerica-jdrew.snowflakecomputing.com";
+const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "SFSENORTHAMERICA-JDREW";
 
-let cachedJWT: string | null = null;
-let jwtExpiresAt = 0;
-
-function getPrivateKeyPem(): string | null {
+function getPrivateKey(): string | null {
   const raw = process.env.SNOWFLAKE_PRIVATE_KEY;
-  if (!raw) return null;
-  return raw.replace(/\\n/g, "\n");
-}
-
-function generateJWT(): string {
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedJWT && now < jwtExpiresAt - 60) return cachedJWT;
-
-  const privateKeyPem = getPrivateKeyPem();
-  if (!privateKeyPem) throw new Error("SNOWFLAKE_PRIVATE_KEY not set");
-
-  const privateKeyObj = crypto.createPrivateKey({ key: privateKeyPem, format: "pem" });
-  const publicKeyObj = crypto.createPublicKey(privateKeyObj);
-  const publicKeyDer = publicKeyObj.export({ type: "spki", format: "der" });
-  const fingerprint = "SHA256:" + crypto.createHash("sha256").update(publicKeyDer).digest("base64");
-
-  const account = SNOWFLAKE_ACCOUNT.toUpperCase();
-  const user = (process.env.SNOWFLAKE_USER || "").toUpperCase();
-  const qualifiedUser = `${account}.${user}`;
-
-  const payload = {
-    iss: `${qualifiedUser}.${fingerprint}`,
-    sub: qualifiedUser,
-    iat: now,
-    exp: now + 3540,
-  };
-
-  cachedJWT = jwt.sign(payload, privateKeyPem, { algorithm: "RS256" });
-  jwtExpiresAt = payload.exp;
-  console.log("Generated Key-Pair JWT for REST API calls");
-  return cachedJWT;
+  if (raw) return raw.replace(/\\n/g, "\n");
+  return null;
 }
 
 function readConnectionConfig(): Record<string, string> {
   const tomlPath = path.join(os.homedir(), ".snowflake", "connections.toml");
   if (!fs.existsSync(tomlPath)) return {};
   const raw = fs.readFileSync(tomlPath, "utf-8");
-  const connName = process.env.SNOWFLAKE_CONNECTION_NAME || "default";
+  const connName = process.env.SNOWFLAKE_CONNECTION_NAME || "jdrew";
   const lines = raw.split("\n");
   let inSection = false;
   const cfg: Record<string, string> = {};
@@ -73,6 +40,31 @@ function readConnectionConfig(): Record<string, string> {
   return cfg;
 }
 
+function generateJwtToken(): string | null {
+  const privateKey = getPrivateKey();
+  if (!privateKey) return null;
+
+  const username = (process.env.SNOWFLAKE_USER || "ADMIN").toUpperCase();
+  const accountParts = SNOWFLAKE_ACCOUNT.toUpperCase().split("-");
+  const qualifiedAccount = accountParts.length >= 2
+    ? `${accountParts[0]}.${accountParts.slice(1).join(".")}`
+    : SNOWFLAKE_ACCOUNT.toUpperCase();
+
+  const pubKeyDer = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" });
+  const fingerprint = crypto.createHash("sha256").update(pubKeyDer).digest("base64");
+  const qualifiedUsername = `${qualifiedAccount}.${username}`;
+
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: `${qualifiedUsername}.SHA256:${fingerprint}`,
+    sub: qualifiedUsername,
+    iat: now,
+    exp: now + 3600,
+  };
+
+  return jwt.sign(payload, privateKey, { algorithm: "RS256" });
+}
+
 function getConnectionConfig(): snowflake.ConnectionOptions {
   const baseConfig = {
     account: SNOWFLAKE_ACCOUNT,
@@ -83,21 +75,13 @@ function getConnectionConfig(): snowflake.ConnectionOptions {
     schema: process.env.SNOWFLAKE_SCHEMA || "APP",
   };
 
-  const privateKeyPem = getPrivateKeyPem();
-  if (privateKeyPem) {
+  const privateKey = getPrivateKey();
+  if (privateKey) {
     console.log("Using Key-Pair JWT authentication");
     return {
       ...baseConfig,
       authenticator: "SNOWFLAKE_JWT",
-      privateKey: privateKeyPem,
-    };
-  }
-
-  if (PAT_TOKEN) {
-    console.log("Using PAT authentication");
-    return {
-      ...baseConfig,
-      password: PAT_TOKEN,
+      privateKey: privateKey,
     };
   }
 
@@ -107,22 +91,16 @@ function getConnectionConfig(): snowflake.ConnectionOptions {
       const token = fs.readFileSync(spcsTokenPath, "utf8").trim();
       console.log("Using SPCS OAuth authentication (token found)");
       return {
-        account: SNOWFLAKE_ACCOUNT,
-        host: SNOWFLAKE_HOST,
-        warehouse: process.env.SNOWFLAKE_WAREHOUSE || "COMPUTE_WH",
-        database: process.env.SNOWFLAKE_DATABASE || "PDM_DEMO",
-        schema: process.env.SNOWFLAKE_SCHEMA || "APP",
+        ...baseConfig,
         authenticator: "OAUTH",
         token: token,
       };
-    } else {
-      console.log("SPCS token file not found at:", spcsTokenPath);
     }
   } catch (e) {
     console.log("Error reading SPCS token:", (e as Error).message);
   }
 
-  console.log("Falling back to no auth");
+  console.log("WARNING: No authentication method available");
   return baseConfig;
 }
 
@@ -192,17 +170,10 @@ export function getRestConfig(): { baseUrl: string; headers: Record<string, stri
     Accept: "application/json",
   };
 
-  const privateKeyPem = getPrivateKeyPem();
-  if (privateKeyPem) {
-    const jwtToken = generateJWT();
+  const jwtToken = generateJwtToken();
+  if (jwtToken) {
     headers["Authorization"] = `Bearer ${jwtToken}`;
     headers["X-Snowflake-Authorization-Token-Type"] = "KEYPAIR_JWT";
-    return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
-  }
-
-  if (PAT_TOKEN) {
-    headers["Authorization"] = `Bearer ${PAT_TOKEN}`;
-    headers["X-Snowflake-Authorization-Token-Type"] = "PROGRAMMATIC_ACCESS_TOKEN";
     return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
   }
 
@@ -212,7 +183,8 @@ export function getRestConfig(): { baseUrl: string; headers: Record<string, stri
       headers["Authorization"] = `Snowflake Token="${token}"`;
       return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
     }
-  } catch {}
+  } catch { }
 
+  console.log("WARNING: No auth token available for REST API");
   return { baseUrl: `https://${SNOWFLAKE_HOST}`, headers };
 }

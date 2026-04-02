@@ -53,10 +53,29 @@ snow_sql -q "DROP AGENT IF EXISTS PDM_DEMO.APP.PDM_AGENT;" 2>/dev/null || true
 echo "  Dropping Cortex Search service..."
 snow_sql -q "DROP CORTEX SEARCH SERVICE IF EXISTS PDM_DEMO.APP.MANUAL_SEARCH;" 2>/dev/null || true
 
+# Unset user-level network policy before dropping database (policy lives in PDM_DEMO)
+echo "  Unsetting user-level network policy..."
+SNOWFLAKE_USER=$(snow_sql -q "SELECT CURRENT_USER()" --format json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['CURRENT_USER()'])" 2>/dev/null || echo "")
+if [ -n "$SNOWFLAKE_USER" ]; then
+    USER_NP=$(snow_sql -q "SHOW PARAMETERS LIKE 'network_policy' FOR USER ${SNOWFLAKE_USER}" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if data and data[0].get('level') == 'USER':
+        print(data[0].get('value', ''))
+except: pass
+" 2>/dev/null || echo "")
+    if echo "$USER_NP" | grep -qi "PDM_USER_NETWORK_POLICY"; then
+        snow_sql -q "ALTER USER ${SNOWFLAKE_USER} UNSET NETWORK_POLICY;" 2>/dev/null || true
+        echo -e "  ${GREEN}✓ User-level network policy unset${NC}"
+    fi
+fi
+
 # Drop external access integrations
 echo "  Dropping external access integrations..."
 snow_sql -q "DROP EXTERNAL ACCESS INTEGRATION IF EXISTS PDM_CORTEX_EXTERNAL_ACCESS;" 2>/dev/null || true
 snow_sql -q "DROP EXTERNAL ACCESS INTEGRATION IF EXISTS PDM_DEMO_EXTERNAL_ACCESS;" 2>/dev/null || true
+snow_sql -q "DROP EXTERNAL ACCESS INTEGRATION IF EXISTS PDM_S3_EXTERNAL_ACCESS;" 2>/dev/null || true
 
 # Drop database (includes all schemas, tables, views, stages, secrets)
 echo "  Dropping database PDM_DEMO..."
@@ -81,4 +100,6 @@ echo -e "  ${YELLOW}NOTE: User RSA keys were NOT removed.${NC}"
 echo "  To manually remove RSA keys if needed:"
 echo "    ALTER USER <username> UNSET RSA_PUBLIC_KEY;"
 echo "    ALTER USER <username> UNSET RSA_PUBLIC_KEY_2;"
+echo ""
+echo -e "  ${YELLOW}NOTE: User-level network policy was unset if it was PDM-managed.${NC}"
 echo ""
