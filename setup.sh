@@ -288,7 +288,8 @@ c = configparser.ConfigParser()
 c.read(p)
 s = '${CONNECTION_NAME}'
 if c.has_section(s) and c.has_option(s, 'private_key_file'):
-    f = os.path.expanduser(c.get(s, 'private_key_file'))
+    f = c.get(s, 'private_key_file').strip('\"').strip(\"'\")
+    f = os.path.expanduser(f)
     if os.path.exists(f): print(f)
 " 2>/dev/null || echo "")
 
