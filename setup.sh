@@ -203,6 +203,8 @@ generate_new_key() {
     echo ""
     echo "  Generating RSA key pair..."
     TEMP_DIR=$(mktemp -d)
+    KEY_DIR="$HOME/.snowflake/keys"
+    mkdir -p "$KEY_DIR"
     openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$TEMP_DIR/key.p8" 2>/dev/null
     openssl rsa -in "$TEMP_DIR/key.p8" -pubout -out "$TEMP_DIR/key.pub" 2>/dev/null
     PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_DIR/key.pub" | tr -d '\n')
@@ -213,6 +215,15 @@ generate_new_key() {
     PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$TEMP_DIR/key.p8")
     snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
     echo -e "  ${GREEN}✓ Private key secret created${NC}"
+
+    CONN_LOWER=$(echo "$CONNECTION_NAME" | tr '[:upper:]' '[:lower:]')
+    cp "$TEMP_DIR/key.p8" "$KEY_DIR/${CONN_LOWER}.p8"
+    chmod 600 "$KEY_DIR/${CONN_LOWER}.p8"
+    echo -e "  ${GREEN}✓ Private key saved to ${KEY_DIR}/${CONN_LOWER}.p8${NC}"
+    echo -e "  ${YELLOW}TIP: Update your connections.toml to use key-pair auth:${NC}"
+    echo -e "    authenticator = \"SNOWFLAKE_JWT\""
+    echo -e "    private_key_file = \"~/.snowflake/keys/${CONN_LOWER}.p8\""
+
     rm -rf "$TEMP_DIR"
 }
 
@@ -262,64 +273,85 @@ except: pass
 " 2>/dev/null || echo "")
 
     if [ "$EXISTING_KEY" = "EXISTS" ]; then
-        echo ""
-        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-        echo -e "${YELLOW}  ⚠️  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
-        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-        echo ""
-        echo "  Another SPCS application may be using this key."
-        echo "  Overwriting it will break that application's authentication."
-        echo ""
-        echo "  Options:"
-        echo "    1) Reuse existing key (requires private key file or existing secret)"
-        echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
-        echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
-        echo ""
-        read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
-        KEY_CHOICE=${KEY_CHOICE:-2}
+        CLI_KEY_FILE=$(python3 -c "
+import os, configparser
+p = os.path.expanduser('~/.snowflake/connections.toml')
+if not os.path.exists(p): exit()
+c = configparser.ConfigParser()
+c.read(p)
+s = '${CONNECTION_NAME}'
+if c.has_section(s) and c.has_option(s, 'private_key_file'):
+    f = os.path.expanduser(c.get(s, 'private_key_file'))
+    if os.path.exists(f): print(f)
+" 2>/dev/null || echo "")
 
-        case $KEY_CHOICE in
-            1)
-                echo ""
-                echo "  Checking for existing private key secret..."
-                SECRET_EXISTS=$(snow_sql -q "SHOW SECRETS LIKE 'SNOWFLAKE_PRIVATE_KEY_SECRET' IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d else 'no')" 2>/dev/null || echo "no")
+        if [ -n "$CLI_KEY_FILE" ]; then
+            echo ""
+            echo -e "  ${GREEN}Detected CLI private key: ${CLI_KEY_FILE}${NC}"
+            echo "  Reusing this key for SPCS (same key pair as your CLI connection)."
+            PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$CLI_KEY_FILE")
+            snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+            echo -e "  ${GREEN}✓ Private key secret created from CLI key${NC}"
+        else
+            echo ""
+            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+            echo -e "${YELLOW}  ⚠️  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
+            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            echo "  Another SPCS application may be using this key."
+            echo "  Overwriting it will break that application's authentication."
+            echo ""
+            echo "  Options:"
+            echo "    1) Reuse existing key (requires private key file or existing secret)"
+            echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
+            echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
+            echo ""
+            read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
+            KEY_CHOICE=${KEY_CHOICE:-2}
 
-                if [ "$SECRET_EXISTS" = "yes" ]; then
-                    echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
-                else
-                    echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
-                    echo "  You need to provide the private key that matches the existing public key."
+            case $KEY_CHOICE in
+                1)
                     echo ""
-                    read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
-                    if [ -f "$PRIVATE_KEY_PATH" ]; then
-                        PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
-                        snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
-                        echo -e "  ${GREEN}✓ Private key secret created${NC}"
+                    echo "  Checking for existing private key secret..."
+                    SECRET_EXISTS=$(snow_sql -q "SHOW SECRETS LIKE 'SNOWFLAKE_PRIVATE_KEY_SECRET' IN SCHEMA PDM_DEMO.APP;" --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d else 'no')" 2>/dev/null || echo "no")
+
+                    if [ "$SECRET_EXISTS" = "yes" ]; then
+                        echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
                     else
-                        echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
-                        echo -e "  ${RED}Cannot continue without private key.${NC}"
+                        echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
+                        echo "  You need to provide the private key that matches the existing public key."
+                        echo ""
+                        read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
+                        if [ -f "$PRIVATE_KEY_PATH" ]; then
+                            PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
+                            snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
+                            echo -e "  ${GREEN}✓ Private key secret created${NC}"
+                        else
+                            echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
+                            echo -e "  ${RED}Cannot continue without private key.${NC}"
+                            exit 1
+                        fi
+                    fi
+                    ;;
+                2)
+                    generate_key_slot_2
+                    ;;
+                3)
+                    echo ""
+                    echo -e "  ${RED}WARNING: This will invalidate any other SPCS apps using this user!${NC}"
+                    read -p "  Are you sure? (yes/no): " CONFIRM
+                    if [ "$CONFIRM" != "yes" ]; then
+                        echo "  Aborted."
                         exit 1
                     fi
-                fi
-                ;;
-            2)
-                generate_key_slot_2
-                ;;
-            3)
-                echo ""
-                echo -e "  ${RED}WARNING: This will invalidate any other SPCS apps using this user!${NC}"
-                read -p "  Are you sure? (yes/no): " CONFIRM
-                if [ "$CONFIRM" != "yes" ]; then
-                    echo "  Aborted."
-                    exit 1
-                fi
-                generate_new_key
-                ;;
-            *)
-                echo -e "  ${YELLOW}Invalid choice, using RSA_PUBLIC_KEY_2 (default)${NC}"
-                generate_key_slot_2
-                ;;
-        esac
+                    generate_new_key
+                    ;;
+                *)
+                    echo -e "  ${YELLOW}Invalid choice, using RSA_PUBLIC_KEY_2 (default)${NC}"
+                    generate_key_slot_2
+                    ;;
+            esac
+        fi
     else
         # No existing key - safe to generate
         generate_new_key

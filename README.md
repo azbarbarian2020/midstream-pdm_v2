@@ -53,6 +53,65 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 
 > **Note**: Seed data is included as static CSV exports in the `data/` directory. ML predictions are pre-computed — no local ML or Python packages needed.
 
+## Connection Setup
+
+This demo uses **Key-Pair JWT authentication** for both the Snowflake CLI and the SPCS service (Cortex REST API calls). No PAT (Programmatic Access Token) is required.
+
+### Step 1: Generate an RSA key pair
+
+```bash
+mkdir -p ~/.snowflake/keys
+openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out ~/.snowflake/keys/<connection_name>.p8
+openssl rsa -in ~/.snowflake/keys/<connection_name>.p8 -pubout -out ~/.snowflake/keys/<connection_name>.pub
+chmod 600 ~/.snowflake/keys/<connection_name>.p8
+```
+
+Replace `<connection_name>` with your Snowflake CLI connection name (e.g., `myaccount`).
+
+### Step 2: Assign the public key to your Snowflake user
+
+You need to run this SQL once as ACCOUNTADMIN. If you don't have a CLI connection yet, you can use Snowsight or a temporary `oauth_authorization_code` connection:
+
+```bash
+PUBLIC_KEY=$(grep -v "BEGIN\|END" ~/.snowflake/keys/<connection_name>.pub | tr -d '\n')
+snow sql --connection <connection_name> -q "ALTER USER <username> SET RSA_PUBLIC_KEY='${PUBLIC_KEY}';"
+```
+
+### Step 3: Configure `~/.snowflake/connections.toml`
+
+Add (or update) your connection entry:
+
+```toml
+[myaccount]
+account = "ORGNAME-ACCOUNTNAME"
+user = "ADMIN"
+authenticator = "SNOWFLAKE_JWT"
+private_key_file = "~/.snowflake/keys/myaccount.p8"
+role = "ACCOUNTADMIN"
+```
+
+Key fields:
+- `authenticator = "SNOWFLAKE_JWT"` -- enables key-pair auth (no browser/MFA prompts)
+- `private_key_file` -- path to your private key (`.p8` file)
+
+### Step 4 (optional): Set a default connection in `~/.snowflake/config.toml`
+
+```toml
+default_connection_name = "myaccount"
+```
+
+This lets you omit `--connection` from `snow` CLI commands.
+
+### Step 5: Verify
+
+```bash
+snow connection test --connection myaccount
+```
+
+This should succeed with no browser prompt. If it does, you're ready to run `setup.sh`.
+
+> **Why key-pair?** Key-pair JWT auth is non-interactive, works for both SQL queries (via snowflake-sdk) and Cortex REST API calls (Agent, Analyst, Search), and avoids the fragility of PATs (which can expire, get disabled, or require manual generation in Snowsight). During setup, the same private key from your CLI connection is automatically stored as an SPCS secret so the deployed service authenticates identically.
+
 ## Quick Start
 
 ```bash
@@ -71,18 +130,21 @@ The setup script will:
 4. Load seed data from static CSV exports (~1M telemetry rows)
 5. Load pre-computed ML predictions (deterministic, seeded)
 6. Create Cortex Search, Semantic View, and Agent
-7. Prompt for PAT and set up RSA key pair (with safe key management)
+7. Set up RSA key pair for authentication (auto-detects CLI key)
 8. Build and push the Docker image
 9. Deploy the SPCS service
 10. Print the application URL
 
 ### Safe Key Management
 
-If you already have an RSA key configured for another SPCS app (like Digital_Twin_Truck_Configurator), the setup script will detect this and offer options:
+The setup script is designed to never break existing authentication:
 
-1. **Reuse existing key** — Requires the matching private key
-2. **Use RSA_PUBLIC_KEY_2** — Both apps work simultaneously (recommended)
-3. **Generate new key** — Warning: breaks other SPCS apps
+- **CLI key auto-detection**: If your CLI connection uses `private_key_file` and the user already has `RSA_PUBLIC_KEY` set, setup.sh automatically reuses that key for the SPCS secret. No prompts, no conflicts.
+- **Existing key from another app**: If an RSA key exists but setup.sh can't find your CLI key file, it offers three options:
+  1. **Reuse existing key** -- Requires the matching private key file or existing secret
+  2. **Use RSA_PUBLIC_KEY_2** -- Both apps work simultaneously (recommended)
+  3. **Generate new key** -- Warning: breaks other SPCS apps using the same user
+- **Fresh account (no existing key)**: Generates a new key pair, stores it as an SPCS secret, and saves a copy to `~/.snowflake/keys/<connection>.p8` with a tip to update your `connections.toml`.
 
 ## Documentation
 
