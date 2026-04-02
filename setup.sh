@@ -51,10 +51,11 @@ setup_connection() {
     echo ""
 
     echo "Testing connection..."
-    snow connection test --connection "$CONNECTION_NAME" || {
+    snow sql --connection "$CONNECTION_NAME" -q "SELECT CURRENT_USER()" >/dev/null 2>&1 || {
         echo -e "${RED}Connection test failed. Check your connection config.${NC}"
         exit 1
     }
+    echo -e "${GREEN}Connection OK${NC}"
     echo ""
 
     ACCOUNT_INFO=$(snow sql --connection "$CONNECTION_NAME" -q "SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS ACCT" --format json 2>/dev/null)

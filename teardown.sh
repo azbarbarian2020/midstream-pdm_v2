@@ -84,6 +84,7 @@ snow_sql -q "DROP DATABASE IF EXISTS PDM_DEMO;" 2>/dev/null || true
 # Drop warehouse
 echo "  Dropping warehouse..."
 snow_sql -q "DROP WAREHOUSE IF EXISTS PDM_DEMO_WH;" 2>/dev/null || true
+snow_sql -q "ALTER USER ${SNOWFLAKE_USER} UNSET DEFAULT_WAREHOUSE;" 2>/dev/null || true
 
 # Drop role
 echo "  Dropping role..."
