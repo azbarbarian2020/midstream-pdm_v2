@@ -56,8 +56,8 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 ## Quick Start
 
 ```bash
-git clone https://github.com/azbarbarian2020/midstream-pdm.git
-cd midstream-pdm
+git clone https://github.com/azbarbarian2020/midstream-pdm_v2.git
+cd midstream-pdm_v2
 ./setup.sh
 ```
 
