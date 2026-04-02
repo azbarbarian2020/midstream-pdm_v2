@@ -46,29 +46,37 @@ CREATE OR REPLACE SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW
       COMMENT = 'Total number of historical maintenance events for this asset.',
 
     TELEMETRY.VIBRATION AS TELEMETRY.VIBRATION
-      COMMENT = 'Vibration reading in mm/s RMS.',
+      WITH SYNONYMS = ('VIBRATION_RMS', 'vibration rms')
+      COMMENT = 'Vibration reading in mm/s RMS. Shown as VIBRATION_RMS for pumps in the Trends tab.',
     TELEMETRY.TEMPERATURE AS TELEMETRY.TEMPERATURE
-      COMMENT = 'Temperature reading in degrees Fahrenheit.',
+      WITH SYNONYMS = ('BEARING_TEMP', 'bearing temperature')
+      COMMENT = 'Temperature reading in degrees Fahrenheit. Shown as BEARING_TEMP for pumps in the Trends tab.',
     TELEMETRY.PRESSURE AS TELEMETRY.PRESSURE
-      COMMENT = 'Pressure reading in PSI.',
+      WITH SYNONYMS = ('DISCHARGE_PRESSURE', 'discharge pressure')
+      COMMENT = 'Pressure reading in PSI. Shown as DISCHARGE_PRESSURE for pumps in the Trends tab.',
     TELEMETRY.FLOW_RATE AS TELEMETRY.FLOW_RATE
       COMMENT = 'Flow rate.',
     TELEMETRY.RPM AS TELEMETRY.RPM
-      COMMENT = 'Rotational speed in revolutions per minute.',
+      WITH SYNONYMS = ('PUMP_SPEED', 'pump speed')
+      COMMENT = 'Rotational speed in RPM. Shown as PUMP_SPEED for pumps in the Trends tab.',
     TELEMETRY.POWER_DRAW AS TELEMETRY.POWER_DRAW
-      COMMENT = 'Power consumption.',
+      WITH SYNONYMS = ('MOTOR_CURRENT', 'motor current')
+      COMMENT = 'Power consumption. Shown as MOTOR_CURRENT for pumps in the Trends tab.',
     TELEMETRY.DIFFERENTIAL_PRESSURE AS TELEMETRY.DIFFERENTIAL_PRESSURE
       COMMENT = 'Differential pressure (pumps only).',
     TELEMETRY.SUCTION_PRESSURE AS TELEMETRY.SUCTION_PRESSURE
       COMMENT = 'Suction pressure (pumps only).',
     TELEMETRY.SEAL_TEMPERATURE AS TELEMETRY.SEAL_TEMPERATURE
-      COMMENT = 'Seal temperature (pumps only).',
+      WITH SYNONYMS = ('CASING_TEMP', 'casing temperature')
+      COMMENT = 'Seal temperature. Shown as CASING_TEMP for pumps in the Trends tab.',
     TELEMETRY.DISCHARGE_TEMP AS TELEMETRY.DISCHARGE_TEMP
-      COMMENT = 'Discharge temperature (compressors only).',
+      WITH SYNONYMS = ('CASING_TEMP_COMPRESSOR', 'discharge temperature')
+      COMMENT = 'Discharge temperature. Shown as DISCHARGE_TEMP in the Trends tab.',
     TELEMETRY.COMPRESSION_RATIO AS TELEMETRY.COMPRESSION_RATIO
-      COMMENT = 'Compression ratio (compressors only).',
+      WITH SYNONYMS = ('VALVE_POSITION', 'valve position')
+      COMMENT = 'Compression ratio. Shown as VALVE_POSITION for pumps in the Trends tab.',
     TELEMETRY.OIL_PRESSURE AS TELEMETRY.OIL_PRESSURE
-      COMMENT = 'Oil system pressure (compressors only).',
+      COMMENT = 'Oil system pressure.',
 
     MAINTENANCE_LOGS.DURATION_HRS AS MAINTENANCE_LOGS.DURATION_HRS
       COMMENT = 'Duration of the maintenance in hours.',
@@ -142,13 +150,16 @@ CREATE OR REPLACE SEMANTIC VIEW PDM_DEMO.APP.FLEET_SEMANTIC_VIEW
       COMMENT = 'Average predicted remaining useful life in days.',
 
     TELEMETRY.AVG_VIBRATION AS AVG(TELEMETRY.VIBRATION)
-      COMMENT = 'Average vibration reading.',
+      WITH SYNONYMS = ('average VIBRATION_RMS')
+      COMMENT = 'Average vibration reading (VIBRATION_RMS for pumps).',
     TELEMETRY.MAX_VIBRATION AS MAX(TELEMETRY.VIBRATION)
       COMMENT = 'Maximum vibration reading.',
     TELEMETRY.AVG_TEMPERATURE AS AVG(TELEMETRY.TEMPERATURE)
-      COMMENT = 'Average temperature reading.',
+      WITH SYNONYMS = ('average BEARING_TEMP')
+      COMMENT = 'Average temperature reading (BEARING_TEMP for pumps).',
     TELEMETRY.AVG_PRESSURE AS AVG(TELEMETRY.PRESSURE)
-      COMMENT = 'Average pressure reading.',
+      WITH SYNONYMS = ('average DISCHARGE_PRESSURE')
+      COMMENT = 'Average pressure reading (DISCHARGE_PRESSURE for pumps).',
 
     MAINTENANCE_LOGS.TOTAL_MAINTENANCE_COST AS SUM(MAINTENANCE_LOGS.COST)
       WITH SYNONYMS = ('total cost', 'total repair cost')
