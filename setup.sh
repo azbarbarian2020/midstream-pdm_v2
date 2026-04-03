@@ -80,8 +80,14 @@ setup_connection() {
 }
 
 snow_sql() {
-    snow sql --connection "$CONNECTION_NAME" "$@"
+    if [ -n "${SNOW_WH:-}" ]; then
+        snow sql --connection "$CONNECTION_NAME" --warehouse "$SNOW_WH" "$@"
+    else
+        snow sql --connection "$CONNECTION_NAME" "$@"
+    fi
 }
+
+SNOW_WH=""
 
 # -------------------------------------------------------------------------
 # Step 1: Infrastructure (DDL)
@@ -89,6 +95,7 @@ snow_sql() {
 create_infrastructure() {
     echo -e "${BOLD}[1/10] Creating database, schemas, tables, and stages...${NC}"
     snow_sql -f "$SCRIPT_DIR/snowflake/setup.sql"
+    SNOW_WH="PDM_DEMO_WH"
     echo -e "${GREEN}✓ Infrastructure created${NC}\n"
 }
 
