@@ -45,10 +45,17 @@ function generateJwtToken(): string | null {
   if (!privateKey) return null;
 
   const username = (process.env.SNOWFLAKE_USER || "ADMIN").toUpperCase();
-  const accountParts = SNOWFLAKE_ACCOUNT.toUpperCase().split("-");
-  const qualifiedAccount = accountParts.length >= 2
-    ? `${accountParts[0]}.${accountParts.slice(1).join(".")}`
-    : SNOWFLAKE_ACCOUNT.toUpperCase();
+
+  const accountLocator = process.env.SNOWFLAKE_ACCOUNT_LOCATOR;
+  let qualifiedAccount: string;
+  if (accountLocator) {
+    qualifiedAccount = accountLocator.toUpperCase();
+  } else {
+    const accountParts = SNOWFLAKE_ACCOUNT.toUpperCase().split("-");
+    qualifiedAccount = accountParts.length >= 2
+      ? `${accountParts[0]}.${accountParts.slice(1).join(".")}`
+      : SNOWFLAKE_ACCOUNT.toUpperCase();
+  }
 
   const pubKeyDer = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" });
   const fingerprint = crypto.createHash("sha256").update(pubKeyDer).digest("base64");

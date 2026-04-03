@@ -64,6 +64,7 @@ setup_connection() {
     SNOWFLAKE_HOST="${ACCOUNT_LOWER}.snowflakecomputing.com"
     REGISTRY_HOST="${ACCOUNT_LOWER}.registry.snowflakecomputing.com"
     SNOWFLAKE_USER=$(snow sql --connection "$CONNECTION_NAME" -q "SELECT CURRENT_USER()" --format json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['CURRENT_USER()'])")
+    SF_ACCOUNT_LOCATOR=$(snow sql --connection "$CONNECTION_NAME" -q "SELECT CURRENT_ACCOUNT()" --format json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['CURRENT_ACCOUNT()'])")
 
     echo -e "  Account:  ${CYAN}${ACCOUNT_LOCATOR}${NC}"
     echo -e "  Host:     ${CYAN}${SNOWFLAKE_HOST}${NC}"
@@ -565,7 +566,7 @@ for row in data:
 ")
     IMAGE_PATH="${REPO_URL}/pdm_frontend:v1"
 
-    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SNOWFLAKE_USER}|g" \
+    sed "s|__IMAGE_PATH__|${IMAGE_PATH}|g; s|__SNOWFLAKE_HOST__|${SNOWFLAKE_HOST}|g; s|__SNOWFLAKE_ACCOUNT__|${ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_ACCOUNT_LOCATOR__|${SF_ACCOUNT_LOCATOR}|g; s|__SNOWFLAKE_USER__|${SNOWFLAKE_USER}|g" \
         "$SCRIPT_DIR/frontend/pdm_service.yaml.template" > /tmp/pdm_service.yaml
 
     snow stage copy /tmp/pdm_service.yaml @PDM_DEMO.APP.SPECS/ --overwrite --database PDM_DEMO --schema APP --connection "$CONNECTION_NAME"
