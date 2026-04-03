@@ -272,16 +272,53 @@ except: pass
         echo -e "${YELLOW}  RSA_PUBLIC_KEY already exists for user ${SNOWFLAKE_USER}${NC}"
         echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo "  Another SPCS application may be using this key."
-        echo "  Overwriting it will break that application's authentication."
-        echo ""
-        echo "  Options:"
-        echo "    1) Reuse existing key (requires private key file or existing secret)"
-        echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
-        echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
-        echo ""
-        read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
-        KEY_CHOICE=${KEY_CHOICE:-2}
+
+        AUTO_KEY_PATH=""
+        CLI_KEY_PATH=$(python3 -c "
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+import os, pathlib
+for f in [pathlib.Path.home()/'.snowflake'/'connections.toml', pathlib.Path.home()/'.snowflake'/'config.toml']:
+    if f.exists():
+        with open(f, 'rb') as fh:
+            cfg = tomllib.load(fh)
+        for section in [cfg.get('${CONNECTION_NAME}', {}), cfg.get('connections', {}).get('${CONNECTION_NAME}', {})]:
+            p = section.get('private_key_file', '')
+            if p:
+                p = os.path.expanduser(p)
+                if os.path.isfile(p):
+                    print(p)
+                    raise SystemExit(0)
+" 2>/dev/null || echo "")
+        if [ -n "$CLI_KEY_PATH" ]; then
+            AUTO_KEY_PATH="$CLI_KEY_PATH"
+        else
+            for CANDIDATE in "$HOME/.snowflake/keys/${CONNECTION_NAME}.p8" "$HOME/.snowflake/keys/pdm_admin_key.p8"; do
+                if [ -f "$CANDIDATE" ]; then
+                    AUTO_KEY_PATH="$CANDIDATE"
+                    break
+                fi
+            done
+        fi
+
+        if [ -n "$AUTO_KEY_PATH" ]; then
+            echo -e "  ${GREEN}Found matching private key: ${AUTO_KEY_PATH}${NC}"
+            echo "  Auto-selecting: Reuse existing key"
+            KEY_CHOICE=1
+        else
+            echo "  Another SPCS application may be using this key."
+            echo "  Overwriting it will break that application's authentication."
+            echo ""
+            echo "  Options:"
+            echo "    1) Reuse existing key (requires private key file or existing secret)"
+            echo "    2) Use RSA_PUBLIC_KEY_2 (secondary slot - BOTH apps work)"
+            echo "    3) Generate NEW key (WARNING: breaks other SPCS apps!)"
+            echo ""
+            read -p "  Choice [1/2/3] (default 2 - recommended): " KEY_CHOICE
+            KEY_CHOICE=${KEY_CHOICE:-2}
+        fi
 
         case $KEY_CHOICE in
             1)
@@ -292,14 +329,14 @@ except: pass
                 if [ "$SECRET_EXISTS" = "yes" ]; then
                     echo -e "  ${GREEN}✓ Private key secret already exists - reusing${NC}"
                 else
-                    echo -e "  ${YELLOW}Private key secret not found in PDM_DEMO.APP.${NC}"
-                    echo "  You need to provide the private key that matches the existing public key."
-                    echo ""
-                    read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
+                    PRIVATE_KEY_PATH="${AUTO_KEY_PATH:-}"
+                    if [ -z "$PRIVATE_KEY_PATH" ]; then
+                        read -p "  Path to private key file (.p8): " PRIVATE_KEY_PATH
+                    fi
                     if [ -f "$PRIVATE_KEY_PATH" ]; then
                         PRIVATE_KEY=$(awk '{printf "%s\\n", $0}' "$PRIVATE_KEY_PATH")
                         snow_sql -q "CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '${PRIVATE_KEY}';"
-                        echo -e "  ${GREEN}✓ Private key secret created${NC}"
+                        echo -e "  ${GREEN}✓ Private key secret created from ${PRIVATE_KEY_PATH}${NC}"
                     else
                         echo -e "  ${RED}File not found: $PRIVATE_KEY_PATH${NC}"
                         echo -e "  ${RED}Cannot continue without private key.${NC}"
