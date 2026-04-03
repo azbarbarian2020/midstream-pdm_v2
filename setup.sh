@@ -588,13 +588,18 @@ if spcs not in ips:
     ips.append(spcs)
 print(','.join(ips))
 ")
-                snow_sql -q "
+                PROC_SQL_FILE=$(mktemp /tmp/fix_np_proc_XXXXXX.sql)
+                cat > "$PROC_SQL_FILE" << 'PROCSQLEOF'
+USE ROLE ACCOUNTADMIN;
+USE DATABASE security_network_db;
+USE SCHEMA security_network_db.policies;
+
 CREATE OR REPLACE PROCEDURE security_network_db.policies.account_level_network_policy_proc()
   RETURNS STRING
   LANGUAGE JAVASCRIPT
   EXECUTE AS CALLER
 AS
-\\\$\\\$
+$$
     function exec(sqlText, binds) {
       binds = binds || [];
       var retval = [];
@@ -612,8 +617,10 @@ AS
       }
       return retval;
     }
-    var desiredIpList = '${DESIRED_IP_CSV}';
-    var currentNpResult = exec(\"SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT\");
+PROCSQLEOF
+                echo "    var desiredIpList = '${DESIRED_IP_CSV}';" >> "$PROC_SQL_FILE"
+                cat >> "$PROC_SQL_FILE" << 'PROCSQLEOF'
+    var currentNpResult = exec("SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT");
     var allowedIpList = '';
     var isNetworkRuleApplied = false;
     if (currentNpResult.length > 0) {
@@ -629,12 +636,14 @@ AS
     } else {
         var policyName = 'ACCOUNT_VPN_POLICY_SE';
         exec('ALTER ACCOUNT UNSET NETWORK_POLICY');
-        exec(\"CREATE OR REPLACE NETWORK POLICY \" + policyName + \" ALLOWED_IP_LIST = ('\" + desiredIpList + \"')\");
+        exec("CREATE OR REPLACE NETWORK POLICY " + policyName + " ALLOWED_IP_LIST = ('" + desiredIpList + "')");
         exec('ALTER ACCOUNT SET NETWORK_POLICY = ' + policyName);
         return 'Network policy updated to ' + policyName + ' with allowed IP ' + desiredIpList + '.';
     }
-\\\$\\\$;
-"
+$$;
+PROCSQLEOF
+                snow_sql -f "$PROC_SQL_FILE"
+                rm -f "$PROC_SQL_FILE"
                 echo -e "  ${GREEN}✓ Enforcement procedure updated with SPCS CIDR${NC}"
                 echo -e "  ${CYAN}  The 12-hour enforcement task will now preserve SPCS access${NC}"
             fi
