@@ -53,6 +53,55 @@ AI-powered predictive maintenance for midstream oil and gas pipeline operations 
 
 > **Note**: Seed data is included as static CSV exports in the `data/` directory. ML predictions are pre-computed — no local ML or Python packages needed.
 
+## CLI Connection Setup
+
+The setup script uses the Snowflake CLI (`snow`) to connect. You must configure **key-pair JWT authentication** in your CLI connection — browser-based auth will not work because the setup script runs non-interactively.
+
+### 1. Generate an RSA Key Pair (if you don't have one)
+
+```bash
+mkdir -p ~/.snowflake/keys
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt > ~/.snowflake/keys/<connection_name>.p8
+chmod 600 ~/.snowflake/keys/<connection_name>.p8
+```
+
+Assign the public key to your Snowflake user:
+```bash
+openssl rsa -in ~/.snowflake/keys/<connection_name>.p8 -pubout -out /tmp/key.pub
+PUBLIC_KEY=$(grep -v 'BEGIN\|END' /tmp/key.pub | tr -d '\n')
+```
+```sql
+ALTER USER <username> SET RSA_PUBLIC_KEY='<PUBLIC_KEY>';
+```
+
+### 2. Configure `~/.snowflake/connections.toml`
+
+```toml
+[<connection_name>]
+account = "<ORG>-<ACCOUNT>"
+user = "<USERNAME>"
+authenticator = "SNOWFLAKE_JWT"
+private_key_file = "~/.snowflake/keys/<connection_name>.p8"
+role = "ACCOUNTADMIN"
+```
+
+**Key points:**
+- `authenticator` must be `SNOWFLAKE_JWT` (not `externalbrowser`)
+- `private_key_file` points to the `.p8` key from step 1
+- Do NOT set `warehouse` — the setup script creates one
+
+### 3. Configure `~/.snowflake/config.toml`
+
+```toml
+default_connection_name = "<connection_name>"
+```
+
+### 4. Verify
+
+```bash
+snow sql --connection <connection_name> -q "SELECT CURRENT_USER()"
+```
+
 ## Quick Start
 
 ```bash
@@ -368,3 +417,5 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed solutions.
 | Map tiles not loading | OSM egress blocked | Check PDM_DEMO_EXTERNAL_ACCESS integration |
 | Docker push unauthorized | Registry login expired | Re-run `snow spcs image-registry login --connection <conn>` |
 | RSA key conflict | Another app using same key | Use RSA_PUBLIC_KEY_2 option during setup |
+| JWT token is invalid (390144) | JWT claims use org-account instead of locator | Setup script auto-detects locator via `SELECT CURRENT_ACCOUNT()` — re-run setup |
+| CLI connection fails | Browser auth in connections.toml | Set `authenticator = "SNOWFLAKE_JWT"` — see [CLI Connection Setup](#cli-connection-setup) |

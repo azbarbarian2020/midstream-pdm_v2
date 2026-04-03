@@ -34,7 +34,7 @@ A predictive maintenance application for midstream oil & gas pipeline operations
                         │                                    │                        │
                         │         ┌──────────────────────────┼─────────────────┐      │
                         │         │  snowflake-sdk (Key-Pair JWT)              │      │
-                        │         │  fetch() REST API (PAT Bearer token)       │      │
+                        │         │  fetch() REST API (Key-Pair JWT Bearer)    │      │
                         │         └──────────────────────────┼─────────────────┘      │
                         │                                    │                        │
                         │  ┌──────────────┐  ┌──────────────┴┐  ┌───────────────┐    │
@@ -56,7 +56,7 @@ A predictive maintenance application for midstream oil & gas pipeline operations
 
 ## Authentication Architecture
 
-The SPCS container uses **two separate auth methods** for different operations:
+The SPCS container uses **key-pair JWT** for all operations:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -70,11 +70,11 @@ The SPCS container uses **two separate auth methods** for different operations:
 │                                                              │
 │  ┌─────────────────────────────┐                             │
 │  │ REST API calls (fetch)      │                             │
-│  │ Cortex Agent, Cortex Analyst│──► PAT Bearer Token         │
-│  │ Authorization: Bearer <pat> │   (SNOWFLAKE_PAT)           │
-│  │ + X-Snowflake-Authorization │                             │
-│  │   -Token-Type: PAT          │                             │
-│  └─────────────────────────────┘                             │
+│  │ Cortex Agent, Cortex Analyst│──► Key-Pair JWT             │
+│  │ Authorization: Bearer <jwt> │   (generated from           │
+│  │ + X-Snowflake-Authorization │    SNOWFLAKE_PRIVATE_KEY +  │
+│  │   -Token-Type: KEYPAIR_JWT  │    SNOWFLAKE_ACCOUNT_LOCATOR│
+│  └─────────────────────────────┘   )                         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -83,16 +83,18 @@ The SPCS container uses **two separate auth methods** for different operations:
 | Operation | Auth Method | Header Format | Secret Source |
 |-----------|-------------|---------------|---------------|
 | SQL queries (snowflake-sdk) | Key-Pair JWT | `authenticator: SNOWFLAKE_JWT` + `privateKey` | `SNOWFLAKE_PRIVATE_KEY_SECRET` |
-| Cortex Agent REST API | PAT | `Authorization: Bearer <pat>` + `X-Snowflake-Authorization-Token-Type: PROGRAMMATIC_ACCESS_TOKEN` | `SNOWFLAKE_PAT_SECRET` |
-| Cortex Analyst REST API | PAT | Same as above | Same |
+| Cortex Agent REST API | Key-Pair JWT | `Authorization: Bearer <jwt>` + `X-Snowflake-Authorization-Token-Type: KEYPAIR_JWT` | `SNOWFLAKE_PRIVATE_KEY_SECRET` + `SNOWFLAKE_ACCOUNT_LOCATOR` env var |
+| Cortex Analyst REST API | Key-Pair JWT | Same as above | Same |
+
+**CRITICAL:** JWT claims (`iss`, `sub`) must use the **account LOCATOR** (e.g. `LNB24417` from `SELECT CURRENT_ACCOUNT()`), not the org-account format. The setup script auto-detects this.
 
 ### What Does NOT Work
 
 | Method | Issue |
 |--------|-------|
 | SPCS OAuth (`/snowflake/session/token`) for Cortex Agent | Returns 401 error 390104 |
-| PAT with `Snowflake Token="..."` format | Returns 401 — wrong header format for PAT |
-| SPCS OAuth for SQL on this account | Blocked by account network policy |
+| Org-account format in JWT claims (e.g. `SFSENORTHAMERICA.CLEANBARBARIAN`) | `JWT token is invalid` (390144) |
+| SPCS OAuth for SQL on some accounts | Blocked by account network policy |
 
 ---
 
@@ -110,13 +112,16 @@ The SPCS container uses **two separate auth methods** for different operations:
 │  │                                                               │
 │  └── PDM_CORTEX_EXTERNAL_ACCESS                                  │
 │      ├── Network Rule: SNOWFLAKE_API_RULE                        │
-│      │   └── EGRESS → sfsenorthamerica-jdrew.snowflakecomputing  │
-│      │                 .com:443 (Cortex Agent REST API)           │
-│      └── Auth Secret: SNOWFLAKE_PAT_SECRET (for Bearer token)    │
+│      │   └── EGRESS → <account>.snowflakecomputing.com:443       │
+│      │                 (Cortex Agent REST API)                    │
+│      └── Auth Secret: SNOWFLAKE_PRIVATE_KEY_SECRET               │
+│                        (for Key-Pair JWT Bearer token)            │
 │                                                                  │
 │  Mounted Secrets (env vars):                                     │
 │  ├── SNOWFLAKE_PRIVATE_KEY_SECRET → SNOWFLAKE_PRIVATE_KEY        │
-│  └── SNOWFLAKE_PAT_SECRET → SNOWFLAKE_PAT                        │
+│  │                                                               │
+│  Env vars (from service YAML):                                   │
+│  ├── SNOWFLAKE_ACCOUNT_LOCATOR (for JWT claims)                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -699,7 +704,7 @@ interface CoMaintenance {
 | MODELS | Stage (internal) | Semantic model YAML |
 | SPECS | Stage (internal) | Service specifications |
 | PDM_REPO | Image Repository | Docker images for SPCS |
-| SNOWFLAKE_PAT_SECRET | Secret (GENERIC_STRING) | PAT token for REST API auth |
+
 | SNOWFLAKE_PRIVATE_KEY_SECRET | Secret (GENERIC_STRING) | RSA private key for SQL auth |
 | OSM_TILES_RULE | Network Rule (EGRESS) | tile.openstreetmap.org:443 |
 | SNOWFLAKE_API_RULE | Network Rule (EGRESS) | sfsenorthamerica-jdrew.snowflakecomputing.com:443 |
@@ -711,7 +716,7 @@ interface CoMaintenance {
 | PDM_DEMO_POOL | Compute Pool (CPU_X64_XS) | Hosts the SPCS service (1 node) |
 | PDM_DEMO_WH | Warehouse (Medium) | Query execution, ML scoring |
 | PDM_DEMO_EXTERNAL_ACCESS | External Access Integration | Map tile egress (OSM_TILES_RULE) |
-| PDM_CORTEX_EXTERNAL_ACCESS | External Access Integration | Cortex REST API egress (SNOWFLAKE_API_RULE + PAT secret) |
+| PDM_CORTEX_EXTERNAL_ACCESS | External Access Integration | Cortex REST API egress (SNOWFLAKE_API_RULE + private key secret) |
 | PDM_FRONTEND | Service (SPCS) | Next.js app, public endpoint at *.snowflakecomputing.app |
 
 ---
@@ -728,6 +733,7 @@ spec:
       env:
         SNOWFLAKE_HOST: sfsenorthamerica-jdrew.snowflakecomputing.com
         SNOWFLAKE_ACCOUNT: SFSENORTHAMERICA-JDREW
+        SNOWFLAKE_ACCOUNT_LOCATOR: LNB24417
         SNOWFLAKE_USER: ADMIN
         SNOWFLAKE_WAREHOUSE: PDM_DEMO_WH
         SNOWFLAKE_DATABASE: PDM_DEMO
@@ -737,10 +743,6 @@ spec:
             objectName: PDM_DEMO.APP.SNOWFLAKE_PRIVATE_KEY_SECRET
           secretKeyRef: secret_string
           envVarName: SNOWFLAKE_PRIVATE_KEY
-        - snowflakeSecret:
-            objectName: PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
-          secretKeyRef: secret_string
-          envVarName: SNOWFLAKE_PAT
       readinessProbe:
         port: 3000
         path: /api/health
@@ -881,7 +883,7 @@ The demo supports "time travel" to show how predictions change over time.
 | `/api/dispatch/reset-demo` | POST | Calls RESET_DEMO SP | SQL |
 | `/api/dispatch/co-maintenance` | POST | Get co-maintenance recommendations for assets | SQL |
 | `/api/agent/thread` | POST | Create local chat thread (UUID) | None |
-| `/api/agent/message` | POST | Send message to Cortex Agent (SSE streaming) | REST (PAT) |
+| `/api/agent/message` | POST | Send message to Cortex Agent (SSE streaming) | REST (Key-Pair JWT) |
 | `/api/health` | GET | Readiness probe | None |
 
 All data endpoints accept optional `?as_of_ts=` parameter for time travel.
@@ -899,11 +901,10 @@ All data endpoints accept optional `?as_of_ts=` parameter for time travel.
 | **ML Model Registry** | FAILURE_CLASSIFIER, RUL_REGRESSOR | Model versioning, batch inference |
 | **Snowflake Notebooks** | ML_TRAINING, SCORE_FLEET | ML training and fleet scoring |
 | **Stored Procedures (Python)** | PLAN_ROUTE | Route optimization with Haversine distance |
-| **Secrets Management** | SNOWFLAKE_PAT_SECRET, SNOWFLAKE_PRIVATE_KEY_SECRET | Secure credential injection into SPCS |
+| **Secrets Management** | SNOWFLAKE_PRIVATE_KEY_SECRET | Secure credential injection into SPCS |
 | **External Access Integrations** | PDM_CORTEX_EXTERNAL_ACCESS, PDM_DEMO_EXTERNAL_ACCESS | Controlled egress from SPCS |
 | **Network Rules** | SNOWFLAKE_API_RULE, OSM_TILES_RULE | Fine-grained egress control |
-| **Key-Pair Authentication** | ADMIN user RSA key | Secure SQL connections from SPCS |
-| **Programmatic Access Tokens** | PAT for ADMIN | REST API auth from SPCS |
+| **Key-Pair Authentication** | ADMIN user RSA key | Secure SQL + REST API connections from SPCS |
 | **Image Repository** | PDM_REPO | Docker image storage for SPCS |
 | **Compute Pools** | PDM_DEMO_POOL (CPU_X64_XS) | Container execution environment |
 | **Semantic Views** | FLEET_SEMANTIC_VIEW | Business-friendly data layer for Cortex Analyst |
@@ -983,8 +984,8 @@ midstream/
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| Cortex Agent 401 (error 390104) | Wrong auth header format | PAT must use `Bearer <token>` + `X-Snowflake-Authorization-Token-Type: PROGRAMMATIC_ACCESS_TOKEN` |
-| Cortex Agent 401 | Using SPCS OAuth for Cortex | SPCS OAuth doesn't work for Cortex Agent — mount PAT secret and use Bearer format |
+| Cortex Agent 401 (error 390104) | Wrong auth header format | Key-Pair JWT must use `Bearer <jwt>` + `X-Snowflake-Authorization-Token-Type: KEYPAIR_JWT` |
+| JWT token is invalid (390144) | JWT claims use org-account format | Use account LOCATOR from `SELECT CURRENT_ACCOUNT()` in JWT `iss`/`sub` claims |
 | Agent responds but empty | SSE parsing issue | Use buffer-based SSE parsing that handles chunk boundaries; parse `response.text.delta`, `response.text`, and `response` event types |
 | Map tiles not loading | External access missing | Ensure `PDM_DEMO_EXTERNAL_ACCESS` is applied to service |
 | REST calls fail from SPCS | Missing egress config | Need BOTH `networkPolicyConfig.allowInternetEgress: true` AND `EXTERNAL_ACCESS_INTEGRATIONS` |

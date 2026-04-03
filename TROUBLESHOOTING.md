@@ -21,15 +21,15 @@ SELECT SYSTEM$GET_SERVICE_STATUS('PDM_DEMO.APP.PDM_FRONTEND');
 
 ## Authentication Issues
 
-### PAT Expired
-Regenerate the PAT and update the secret:
+### JWT Token is Invalid (390144)
+The JWT claims (`iss`, `sub`) must use the **account LOCATOR** (e.g. `LNB24417`), not the org-account format (e.g. `SFSENORTHAMERICA-CLEANBARBARIAN`).
+
+Get your locator:
 ```sql
-CREATE OR REPLACE SECRET PDM_DEMO.APP.SNOWFLAKE_PAT_SECRET
-  TYPE = GENERIC_STRING SECRET_STRING = '<new-pat>';
--- Then restart the service:
-ALTER SERVICE PDM_DEMO.APP.PDM_FRONTEND SUSPEND;
-ALTER SERVICE PDM_DEMO.APP.PDM_FRONTEND RESUME;
+SELECT CURRENT_ACCOUNT();
 ```
+
+The setup script auto-detects this and passes it as `SNOWFLAKE_ACCOUNT_LOCATOR` in the service YAML. If you see this error, re-run `./setup.sh`.
 
 ### Key-Pair Authentication Failure
 Verify the public key is assigned:
@@ -38,11 +38,35 @@ DESCRIBE USER <username>;
 -- Check RSA_PUBLIC_KEY is set
 ```
 
+Verify the fingerprint matches:
+```bash
+openssl rsa -in ~/.snowflake/keys/<connection>.p8 -pubout -outform DER 2>/dev/null | openssl dgst -sha256 -binary | openssl enc -base64
+```
+Compare with:
+```sql
+DESCRIBE USER <username>;
+-- RSA_PUBLIC_KEY_FP should match SHA256:<fingerprint>
+```
+
 Regenerate if needed:
 ```bash
-openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out /tmp/key.p8
-openssl rsa -in /tmp/key.p8 -pubout -out /tmp/key.pub
+openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out ~/.snowflake/keys/<connection>.p8
+openssl rsa -in ~/.snowflake/keys/<connection>.p8 -pubout -out /tmp/key.pub
 PUBLIC_KEY=$(grep -v 'BEGIN\|END' /tmp/key.pub | tr -d '\n')
+```
+```sql
+ALTER USER <username> SET RSA_PUBLIC_KEY='<PUBLIC_KEY>';
+```
+
+### CLI Connection Test Fails
+If `snow connection test` fails with a warehouse error after teardown:
+```sql
+ALTER USER <username> UNSET DEFAULT_WAREHOUSE;
+```
+
+Or test with a simple query instead:
+```bash
+snow sql --connection <conn> -q "SELECT CURRENT_USER()"
 ```
 
 ## Cortex Agent Errors
