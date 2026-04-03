@@ -429,6 +429,41 @@ except:
 
     echo "  Account network policy: $CURRENT_POLICY"
 
+    SECURITY_TASK_DETECTED=$(snow_sql -q "SHOW TASKS LIKE 'ACCOUNT_LEVEL_NETWORK_POLICY_TASK' IN ACCOUNT;" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for row in data:
+        if 'NETWORK_POLICY' in row.get('name', '').upper():
+            state = row.get('state', '')
+            schedule = row.get('schedule', '')
+            print(f'{state}|{schedule}')
+            break
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    if [ -n "$SECURITY_TASK_DETECTED" ]; then
+        TASK_STATE=$(echo "$SECURITY_TASK_DETECTED" | cut -d'|' -f1)
+        TASK_SCHEDULE=$(echo "$SECURITY_TASK_DETECTED" | cut -d'|' -f2)
+        echo ""
+        echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${RED}  SECURITY ENFORCEMENT TASK DETECTED${NC}"
+        echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "  Task:     ACCOUNT_LEVEL_NETWORK_POLICY_TASK"
+        echo -e "  State:    ${TASK_STATE}"
+        echo -e "  Schedule: ${TASK_SCHEDULE}"
+        echo ""
+        echo -e "  This task periodically resets the account network policy"
+        echo -e "  to a hardcoded VPN IP list, wiping any SPCS CIDRs added."
+        echo -e "  ${BOLD}Modifying the account policy directly will NOT persist.${NC}"
+        echo ""
+        echo -e "  ${CYAN}Creating a user-level network policy instead. This is${NC}"
+        echo -e "  ${CYAN}immune to the account-level enforcement task.${NC}"
+        NP_CHOICE=1
+    fi
+
     IP_LIST=$(snow_sql -q "DESC NETWORK POLICY ${CURRENT_POLICY};" --format json 2>/dev/null | python3 -c "
 import sys, json
 try:
@@ -441,37 +476,82 @@ except:
     pass
 " 2>/dev/null || echo "")
 
-    if echo "$IP_LIST" | grep -q "$SPCS_CIDR"; then
-        echo "  SPCS CIDR $SPCS_CIDR already in account policy allow-list."
-        echo -e "${GREEN}✓ SPCS IP already allowed${NC}\n"
-        return
+    USER_POLICY_LEVEL=$(snow_sql -q "SHOW PARAMETERS LIKE 'NETWORK_POLICY' FOR USER ${SNOWFLAKE_USER};" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if data:
+        level = data[0].get('level', '')
+        value = data[0].get('value', '')
+        print(f'{level}|{value}')
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    USER_NP_LEVEL=$(echo "$USER_POLICY_LEVEL" | cut -d'|' -f1)
+    USER_NP_NAME=$(echo "$USER_POLICY_LEVEL" | cut -d'|' -f2)
+
+    if [ "$USER_NP_LEVEL" = "USER" ]; then
+        USER_NP_IPS=$(snow_sql -q "DESC NETWORK POLICY ${USER_NP_NAME};" --format json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for row in data:
+        if row.get('name') == 'ALLOWED_IP_LIST':
+            print(row.get('value', ''))
+            break
+except:
+    pass
+" 2>/dev/null || echo "")
+        if echo "$USER_NP_IPS" | grep -q "$SPCS_CIDR"; then
+            echo "  User-level policy '${USER_NP_NAME}' already includes SPCS CIDR."
+            echo -e "${GREEN}✓ SPCS IP already allowed (user-level policy)${NC}\n"
+            return
+        else
+            echo "  User-level policy '${USER_NP_NAME}' exists but missing SPCS CIDR."
+            echo "  Will update it to include ${SPCS_CIDR}."
+            IP_LIST="$USER_NP_IPS"
+            NP_CHOICE=1
+        fi
     fi
 
-    echo ""
-    echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}  ACCOUNT NETWORK POLICY - SPCS ACCESS${NC}"
-    echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo "  The account network policy '$CURRENT_POLICY' does not include"
-    echo "  the SPCS service CIDR ($SPCS_CIDR)."
-    echo ""
-    echo "  Without this, the SPCS container cannot call Snowflake APIs"
-    echo "  (Cortex Agent, SQL, etc.)."
-    echo ""
-    echo -e "${CYAN}  This script will create a user-level network policy for${NC}"
-    echo -e "${CYAN}  ${SNOWFLAKE_USER} that allows SPCS egress IPs. This is safe${NC}"
-    echo -e "${CYAN}  because it only affects this user and won't be wiped by${NC}"
-    echo -e "${CYAN}  account-level security tasks.${NC}"
-    echo ""
-    echo "  Options:"
-    echo "    1) Create user-level network policy (recommended - survives security tasks)"
-    echo "    2) Add SPCS CIDR to account policy directly (may be wiped by security tasks)"
-    echo "    3) Skip (I'll handle this manually)"
-    echo ""
-    read -p "  Choice [1/2/3] (default 1): " NP_CHOICE
-    NP_CHOICE=\${NP_CHOICE:-1}
+    if echo "$IP_LIST" | grep -q "$SPCS_CIDR"; then
+        if [ -z "$SECURITY_TASK_DETECTED" ]; then
+            echo "  SPCS CIDR $SPCS_CIDR already in account policy allow-list."
+            echo -e "${GREEN}✓ SPCS IP already allowed${NC}\n"
+            return
+        else
+            echo "  SPCS CIDR found in account policy, but security task will remove it."
+            echo "  Creating user-level policy for persistence."
+        fi
+    fi
 
-    case \$NP_CHOICE in
+    if [ -z "${NP_CHOICE:-}" ]; then
+        echo ""
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}  ACCOUNT NETWORK POLICY - SPCS ACCESS${NC}"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "  The account network policy '$CURRENT_POLICY' does not include"
+        echo "  the SPCS service CIDR ($SPCS_CIDR)."
+        echo ""
+        echo "  Without this, the SPCS container cannot call Snowflake APIs"
+        echo "  (Cortex Agent, SQL, etc.)."
+        echo ""
+        echo -e "${CYAN}  A user-level network policy is recommended. It only${NC}"
+        echo -e "${CYAN}  affects ${SNOWFLAKE_USER} and survives account-level${NC}"
+        echo -e "${CYAN}  security task resets.${NC}"
+        echo ""
+        echo "  Options:"
+        echo "    1) Create user-level network policy (recommended - survives security tasks)"
+        echo "    2) Add SPCS CIDR to account policy directly (may be wiped by security tasks)"
+        echo "    3) Skip (I'll handle this manually)"
+        echo ""
+        read -p "  Choice [1/2/3] (default 1): " NP_CHOICE
+        NP_CHOICE=${NP_CHOICE:-1}
+    fi
+
+    case $NP_CHOICE in
         1)
             echo "  Creating user-level network policy for ${SNOWFLAKE_USER}..."
 
@@ -484,31 +564,48 @@ if spcs not in ips:
 print(','.join([f\"'{ip}'\" for ip in ips]))
 ")
 
-            snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_DEMO.APP.PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: includes VPN IPs + SPCS CIDR - managed by setup.sh';"
+            snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: VPN IPs + SPCS CIDR. Immune to account-level security task. Managed by setup.sh';"
 
-            snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET NETWORK_POLICY = PDM_DEMO.APP.PDM_USER_NETWORK_POLICY;"
+            snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET NETWORK_POLICY = PDM_USER_NETWORK_POLICY;"
             echo -e "  ${GREEN}✓ User-level network policy created and assigned${NC}"
             echo -e "  ${CYAN}  Policy: PDM_USER_NETWORK_POLICY${NC}"
             echo -e "  ${CYAN}  Includes all VPN IPs from account policy + SPCS CIDR${NC}"
-            echo -e "  ${CYAN}  User '${SNOWFLAKE_USER}' has RSA key auth → security task won't disable them${NC}"
+            echo -e "  ${CYAN}  Assigned to user '${SNOWFLAKE_USER}' (immune to account-level resets)${NC}"
             ;;
         2)
-            echo "  Adding $SPCS_CIDR to account policy..."
-            if [ -n "$IP_LIST" ]; then
-                NEW_IP_LIST="$IP_LIST,$SPCS_CIDR"
+            if [ -n "$SECURITY_TASK_DETECTED" ]; then
+                echo -e "  ${RED}Cannot use option 2: security enforcement task will overwrite changes.${NC}"
+                echo -e "  ${RED}Falling back to option 1 (user-level policy).${NC}"
+                NP_CHOICE=1
+                COMBINED_IPS=$(python3 -c "
+ip_list = '''$IP_LIST'''
+spcs = '$SPCS_CIDR'
+ips = [ip.strip().strip(\"'\") for ip in ip_list.split(',') if ip.strip()]
+if spcs not in ips:
+    ips.append(spcs)
+print(','.join([f\"'{ip}'\" for ip in ips]))
+")
+                snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: VPN IPs + SPCS CIDR. Immune to account-level security task. Managed by setup.sh';"
+                snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET NETWORK_POLICY = PDM_USER_NETWORK_POLICY;"
+                echo -e "  ${GREEN}✓ User-level network policy created and assigned (fallback from option 2)${NC}"
             else
-                NEW_IP_LIST="$SPCS_CIDR"
-            fi
-            FORMATTED_IPS=$(echo "$NEW_IP_LIST" | python3 -c "
+                echo "  Adding $SPCS_CIDR to account policy..."
+                if [ -n "$IP_LIST" ]; then
+                    NEW_IP_LIST="$IP_LIST,$SPCS_CIDR"
+                else
+                    NEW_IP_LIST="$SPCS_CIDR"
+                fi
+                FORMATTED_IPS=$(echo "$NEW_IP_LIST" | python3 -c "
 import sys
 ips = sys.stdin.read().strip().split(',')
 formatted = ','.join([f\"'{ip.strip()}'\" for ip in ips if ip.strip()])
 print(formatted)
 ")
-            snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($FORMATTED_IPS);"
-            echo -e "  ${GREEN}✓ SPCS CIDR added to account policy${NC}"
-            echo -e "  ${YELLOW}  WARNING: Account-level security tasks may overwrite this every 12 hours.${NC}"
-            echo -e "  ${YELLOW}  Consider option 1 (user-level policy) for a permanent solution.${NC}"
+                snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($FORMATTED_IPS);"
+                echo -e "  ${GREEN}✓ SPCS CIDR added to account policy${NC}"
+                echo -e "  ${YELLOW}  WARNING: If a security enforcement task exists, this may be overwritten.${NC}"
+                echo -e "  ${YELLOW}  Consider option 1 (user-level policy) for a permanent solution.${NC}"
+            fi
             ;;
         3)
             echo -e "  ${YELLOW}Skipped. You must ensure SPCS IP $SPCS_CIDR is allowed manually.${NC}"

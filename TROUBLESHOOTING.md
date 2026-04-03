@@ -139,6 +139,32 @@ SHOW IMAGES IN IMAGE REPOSITORY PDM_DEMO.APP.PDM_REPO;
 
 ## Network Issues
 
+### SPCS Service Stops Working Every ~12 Hours
+**Symptom**: The SPCS service cannot call Snowflake APIs (Cortex Agent, SQL). Service logs show network/auth errors. The service worked after initial setup but breaks periodically.
+
+**Cause**: An account-level security enforcement task (`SECURITY_NETWORK_DB.POLICIES.ACCOUNT_LEVEL_NETWORK_POLICY_TASK`) runs every 720 minutes (12 hours) and replaces the account network policy (`ACCOUNT_VPN_POLICY_SE`) with a hardcoded VPN IP list that does not include the SPCS CIDR (`153.45.59.0/24`).
+
+Check if the task exists:
+```sql
+SHOW TASKS LIKE '%NETWORK_POLICY%' IN ACCOUNT;
+```
+
+**Fix**: Create a **user-level** network policy. User-level policies override the account policy for that user and are not touched by the enforcement task:
+```sql
+-- Get current VPN IPs from the account policy
+DESC NETWORK POLICY ACCOUNT_VPN_POLICY_SE;
+
+-- Create user-level policy with VPN IPs + SPCS CIDR
+CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY
+  ALLOWED_IP_LIST = (<all VPN IPs>, '153.45.59.0/24')
+  COMMENT = 'User-level NP: VPN IPs + SPCS CIDR. Immune to account-level security task.';
+
+-- Assign to the service user
+ALTER USER <username> SET NETWORK_POLICY = PDM_USER_NETWORK_POLICY;
+```
+
+The `setup.sh` script (Step 7b) automatically detects this task and creates a user-level policy. If you previously chose option 2 (modify account policy), re-run setup or create the user-level policy manually.
+
 ### Map Tiles Not Loading
 Ensure the OSM external access integration exists:
 ```sql
