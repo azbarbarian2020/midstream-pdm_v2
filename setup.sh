@@ -551,11 +551,7 @@ except:
         NP_CHOICE=${NP_CHOICE:-1}
     fi
 
-    case $NP_CHOICE in
-        1)
-            echo "  Creating user-level network policy for ${SNOWFLAKE_USER}..."
-
-            COMBINED_IPS=$(python3 -c "
+    COMBINED_IPS=$(python3 -c "
 ip_list = '''$IP_LIST'''
 spcs = '$SPCS_CIDR'
 ips = [ip.strip().strip(\"'\") for ip in ip_list.split(',') if ip.strip()]
@@ -563,6 +559,10 @@ if spcs not in ips:
     ips.append(spcs)
 print(','.join([f\"'{ip}'\" for ip in ips]))
 ")
+
+    case $NP_CHOICE in
+        1)
+            echo "  Creating user-level network policy for ${SNOWFLAKE_USER}..."
 
             snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: VPN IPs + SPCS CIDR. Immune to account-level security task. Managed by setup.sh';"
 
@@ -571,37 +571,86 @@ print(','.join([f\"'{ip}'\" for ip in ips]))
             echo -e "  ${CYAN}  Policy: PDM_USER_NETWORK_POLICY${NC}"
             echo -e "  ${CYAN}  Includes all VPN IPs from account policy + SPCS CIDR${NC}"
             echo -e "  ${CYAN}  Assigned to user '${SNOWFLAKE_USER}' (immune to account-level resets)${NC}"
-            ;;
-        2)
+
+            echo ""
+            echo "  Adding SPCS CIDR to account-level policy (required for SPCS service connections)..."
+            snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($COMBINED_IPS);"
+            echo -e "  ${GREEN}✓ SPCS CIDR added to account policy${NC}"
+
             if [ -n "$SECURITY_TASK_DETECTED" ]; then
-                echo -e "  ${RED}Cannot use option 2: security enforcement task will overwrite changes.${NC}"
-                echo -e "  ${RED}Falling back to option 1 (user-level policy).${NC}"
-                NP_CHOICE=1
-                COMBINED_IPS=$(python3 -c "
+                echo ""
+                echo "  Updating enforcement procedure to include SPCS CIDR permanently..."
+                DESIRED_IP_CSV=$(python3 -c "
 ip_list = '''$IP_LIST'''
 spcs = '$SPCS_CIDR'
 ips = [ip.strip().strip(\"'\") for ip in ip_list.split(',') if ip.strip()]
 if spcs not in ips:
     ips.append(spcs)
-print(','.join([f\"'{ip}'\" for ip in ips]))
+print(','.join(ips))
 ")
+                snow_sql -q "
+CREATE OR REPLACE PROCEDURE security_network_db.policies.account_level_network_policy_proc()
+  RETURNS STRING
+  LANGUAGE JAVASCRIPT
+  EXECUTE AS CALLER
+AS
+\\\$\\\$
+    function exec(sqlText, binds) {
+      binds = binds || [];
+      var retval = [];
+      var stmnt = snowflake.createStatement({sqlText: sqlText, binds: binds});
+      var result;
+      try { result = stmnt.execute(); }
+      catch(err) { return err; }
+      var columnCount = stmnt.getColumnCount();
+      var columnNames = [];
+      for (var i = 1; i <= columnCount; i++) { columnNames.push(stmnt.getColumnName(i)); }
+      while(result.next()) {
+        var o = {};
+        for (var ci = 0; ci < columnNames.length; ci++) { o[columnNames[ci]] = result.getColumnValue(columnNames[ci]); }
+        retval.push(o);
+      }
+      return retval;
+    }
+    var desiredIpList = '${DESIRED_IP_CSV}';
+    var currentNpResult = exec(\"SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT\");
+    var allowedIpList = '';
+    var isNetworkRuleApplied = false;
+    if (currentNpResult.length > 0) {
+        var currentNpName = currentNpResult[0]['value'];
+        var describeNpResult = exec('DESCRIBE NETWORK POLICY ' + currentNpName);
+        var allowedIpListRow = describeNpResult.filter(function(item) { return item.name === 'ALLOWED_IP_LIST'; });
+        allowedIpList = allowedIpListRow.length > 0 ? allowedIpListRow[0]['value'] : '';
+        var networkRuleListRow = describeNpResult.filter(function(item) { return item.name === 'ALLOWED_NETWORK_RULE_LIST'; });
+        isNetworkRuleApplied = networkRuleListRow.length > 0;
+    }
+    if (currentNpResult.length > 0 && allowedIpList === desiredIpList && isNetworkRuleApplied === false) {
+        return 'Allowed IP matches. No changes required.';
+    } else {
+        var policyName = 'ACCOUNT_VPN_POLICY_SE';
+        exec('ALTER ACCOUNT UNSET NETWORK_POLICY');
+        exec(\"CREATE OR REPLACE NETWORK POLICY \" + policyName + \" ALLOWED_IP_LIST = ('\" + desiredIpList + \"')\");
+        exec('ALTER ACCOUNT SET NETWORK_POLICY = ' + policyName);
+        return 'Network policy updated to ' + policyName + ' with allowed IP ' + desiredIpList + '.';
+    }
+\\\$\\\$;
+"
+                echo -e "  ${GREEN}✓ Enforcement procedure updated with SPCS CIDR${NC}"
+                echo -e "  ${CYAN}  The 12-hour enforcement task will now preserve SPCS access${NC}"
+            fi
+            ;;
+        2)
+            if [ -n "$SECURITY_TASK_DETECTED" ]; then
+                echo -e "  ${RED}Cannot use option 2 alone: security enforcement task will overwrite changes.${NC}"
+                echo -e "  ${RED}Falling back to option 1 (user-level + account-level + procedure update).${NC}"
+                NP_CHOICE=1
                 snow_sql -q "CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY ALLOWED_IP_LIST = ($COMBINED_IPS) COMMENT = 'User-level NP for PDM demo: VPN IPs + SPCS CIDR. Immune to account-level security task. Managed by setup.sh';"
                 snow_sql -q "ALTER USER ${SNOWFLAKE_USER} SET NETWORK_POLICY = PDM_USER_NETWORK_POLICY;"
-                echo -e "  ${GREEN}✓ User-level network policy created and assigned (fallback from option 2)${NC}"
+                snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($COMBINED_IPS);"
+                echo -e "  ${GREEN}✓ User-level + account-level policies updated (fallback from option 2)${NC}"
             else
                 echo "  Adding $SPCS_CIDR to account policy..."
-                if [ -n "$IP_LIST" ]; then
-                    NEW_IP_LIST="$IP_LIST,$SPCS_CIDR"
-                else
-                    NEW_IP_LIST="$SPCS_CIDR"
-                fi
-                FORMATTED_IPS=$(echo "$NEW_IP_LIST" | python3 -c "
-import sys
-ips = sys.stdin.read().strip().split(',')
-formatted = ','.join([f\"'{ip.strip()}'\" for ip in ips if ip.strip()])
-print(formatted)
-")
-                snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($FORMATTED_IPS);"
+                snow_sql -q "ALTER NETWORK POLICY ${CURRENT_POLICY} SET ALLOWED_IP_LIST = ($COMBINED_IPS);"
                 echo -e "  ${GREEN}✓ SPCS CIDR added to account policy${NC}"
                 echo -e "  ${YELLOW}  WARNING: If a security enforcement task exists, this may be overwritten.${NC}"
                 echo -e "  ${YELLOW}  Consider option 1 (user-level policy) for a permanent solution.${NC}"

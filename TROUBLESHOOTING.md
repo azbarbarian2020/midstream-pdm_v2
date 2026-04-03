@@ -149,21 +149,36 @@ Check if the task exists:
 SHOW TASKS LIKE '%NETWORK_POLICY%' IN ACCOUNT;
 ```
 
-**Fix**: Create a **user-level** network policy. User-level policies override the account policy for that user and are not touched by the enforcement task:
-```sql
--- Get current VPN IPs from the account policy
-DESC NETWORK POLICY ACCOUNT_VPN_POLICY_SE;
+**Important**: SPCS service connections are evaluated against the **account-level** policy, not user-level policies. A user-level policy only covers direct user connections (CLI, UI). The SPCS CIDR must be in the account-level policy for the service to connect.
 
--- Create user-level policy with VPN IPs + SPCS CIDR
+**Fix (two parts)**:
+
+1. **Account-level policy** — Add the SPCS CIDR to the account policy AND update the enforcement procedure so the 12-hour task doesn't wipe it:
+```sql
+-- Add SPCS CIDR to the account policy (immediate fix, lasts until next task run)
+DESC NETWORK POLICY ACCOUNT_VPN_POLICY_SE;
+ALTER NETWORK POLICY ACCOUNT_VPN_POLICY_SE SET ALLOWED_IP_LIST = (<all existing VPN IPs>, '153.45.59.0/24');
+
+-- Permanent fix: update the enforcement procedure's desiredIpList to include SPCS CIDR
+-- Re-create the procedure in SECURITY_NETWORK_DB.POLICIES with '153.45.59.0/24' appended
+-- to the desiredIpList variable, then verify:
+CALL security_network_db.policies.account_level_network_policy_proc();
+-- Should return: "Allowed IP matches. No changes required."
+```
+
+2. **User-level policy** (belt-and-suspenders for direct user access):
+```sql
 CREATE OR REPLACE NETWORK POLICY PDM_USER_NETWORK_POLICY
   ALLOWED_IP_LIST = (<all VPN IPs>, '153.45.59.0/24')
   COMMENT = 'User-level NP: VPN IPs + SPCS CIDR. Immune to account-level security task.';
-
--- Assign to the service user
 ALTER USER <username> SET NETWORK_POLICY = PDM_USER_NETWORK_POLICY;
 ```
 
-The `setup.sh` script (Step 7b) automatically detects this task and creates a user-level policy. If you previously chose option 2 (modify account policy), re-run setup or create the user-level policy manually.
+The `setup.sh` script (Step 7b) automatically detects the enforcement task and creates both policies. If the service stops working, first check whether the SPCS CIDR is in the account-level policy:
+```sql
+DESC NETWORK POLICY ACCOUNT_VPN_POLICY_SE;
+-- Look for 153.45.59.0/24 in ALLOWED_IP_LIST
+```
 
 ### Map Tiles Not Loading
 Ensure the OSM external access integration exists:
